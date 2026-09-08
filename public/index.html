@@ -55,6 +55,8 @@ h1{font-size:clamp(52px,9vw,104px);font-weight:900;line-height:1;margin:14px 0 4
 .kv span{font-family:var(--mono);direction:ltr;text-align:left;color:var(--text);word-break:break-all}
 .clue{font-size:14px;line-height:1.85;color:#cfcfcf;white-space:pre-wrap}
 .clue.none{color:#666;font-style:italic}
+.summary{font-family:var(--mono);font-size:11.5px;color:#b9b9b9;border-right:2px solid var(--red-dim);padding-right:10px;line-height:1.8;margin-bottom:12px}
+.summary b{color:var(--red);font-weight:600}
 #map{height:340px;border-radius:14px;border:1px solid var(--line);margin-top:16px;direction:ltr;filter:grayscale(.55) invert(.92) hue-rotate(180deg) brightness(.9)}
 #mapWrap{display:none}
 #mapWrap.on{display:block}
@@ -111,7 +113,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
     <div class="panel"><h3>☀️ חישוב שמש וצללים <span class="conf high" style="margin:0;font-size:10px">דטרמיניסטי</span></h3><div id="sunPanel"></div></div>
   </div>
   <div class="cols">
-    <div class="panel"><h3>🔬 ניתוח רמת שגיאה (ELA) <span class="conf med" style="margin:0;font-size:10px">זיהוי עריכה</span></h3><canvas id="ela" style="max-width:100%;border-radius:8px"></canvas><div class="note" id="elaNote"></div></div>
+    <div class="panel"><h3>🔬 ניתוח רמת שגיאה (ELA) <span class="conf med" style="margin:0;font-size:10px">זיהוי עריכה</span></h3><canvas id="ela" style="max-width:100%;border-radius:8px"></canvas><div class="note" id="elaNote"></div><div class="note" id="ghostNote"></div></div>
     <div class="panel"><h3>🧾 שפיות מטא-דאטה ומקור</h3><div id="sanityPanel"></div></div>
   </div>
   <div class="cols">
@@ -120,7 +122,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
   </div>
   <div class="cols">
     <div class="panel"><h3>🌿 סביבה ואדריכלות</h3><div class="clue" id="cEnv"></div></div>
-    <div class="panel"><h3>🔦 אור וצללים</h3><div class="clue" id="cShadow"></div></div>
+    <div class="panel"><h3>🔦 אור וצללים</h3><div class="clue" id="cShadow"></div><div class="note" id="lumNote" style="margin-top:10px"></div></div>
   </div>
   <div class="cols">
     <div class="panel"><h3>🖼️ תיאור כללי</h3><div class="clue" id="cCap"></div></div>
@@ -135,6 +137,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const setSummary=(id,t)=>{const s=$(id);if(!s||!t)return;let el=s.previousElementSibling;if(!el||!el.classList||!el.classList.contains('summary')){el=document.createElement('div');el.className='summary';s.parentNode.insertBefore(el,s);}el.innerHTML='<b>סיכום</b> '+esc(t);};
 
 // deco ticker
 (()=>{const p=[];for(let i=0;i<24;i++){p.push((Math.random()*90-45).toFixed(4)+'°N '+(Math.random()*70+25).toFixed(4)+'°E · ALT '+(200+Math.random()*900|0)+'m · CONF --');}$('tick').textContent=(p.join('  |  ')+'  |  ').repeat(2);})();
@@ -168,9 +171,51 @@ function runEla(){
   };
   re.src=src.toDataURL('image/jpeg',0.75);
 }
+
+// JPEG ghost: residual curve over re-encode qualities; a local minimum below the final-quality
+// residual is the signature of a previous save — double compression / possible edit
+async function jpegGhost(){
+  const note=$('ghostNote');
+  if(!lastCanvas){note.textContent='';return;}
+  note.textContent='מחשב עקומת דחיסה (JPEG ghost)…';
+  const w=lastCanvas.width,h2=lastCanvas.height;
+  const src=document.createElement('canvas');src.width=w;src.height=h2;const sx=src.getContext('2d');sx.drawImage(lastCanvas,0,0);
+  const a=sx.getImageData(0,0,w,h2).data;
+  const qs=[55,65,75,85,95];const res=[];
+  for(const q of qs){
+    const url=src.toDataURL('image/jpeg',q/100);
+    const img=await new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.onerror=()=>r(null);i.src=url;});
+    if(!img){note.textContent='';return;}
+    const rc=document.createElement('canvas');rc.width=w;rc.height=h2;const rx=rc.getContext('2d');rx.drawImage(img,0,0);
+    const b=rx.getImageData(0,0,w,h2).data;let s=0,n=0;
+    for(let i=0;i<a.length;i+=400){s+=Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]);n+=3;}
+    res.push(s/n);
+  }
+  let ghost=-1;for(let i=1;i<qs.length-1;i++){if(res[i]<res[i-1]&&res[i]<res[i+1]&&res[i]<res[qs.length-1]*0.9){ghost=i;break;}}
+  const curve=qs.map((q,i)=>'q'+q+': '+res[i].toFixed(1)).join(' · ');
+  note.textContent=(ghost>0
+    ?'JPEG ghost: מינימום מקומי בעקומה סביב איכות '+qs[ghost]+' — חתימת דחיסה חוזרת: התמונה כנראה נערכה או נשמרה מחדש מעל שמירה קודמת. '
+    :'JPEG ghost: אין מינימום מקומי חריג בעקומה — אין סימן ברור לשמירה חוזרת (לא שולל עריכה). ')+'(שארית: '+curve+')';
+}
+
+// deterministic luminance histogram — AI-independent day/night cross-check
+function lumStats(){
+  if(!lastCanvas)return null;
+  const c=document.createElement('canvas');c.width=200;c.height=Math.max(1,Math.round(200*lastCanvas.height/lastCanvas.width));
+  const x=c.getContext('2d');x.drawImage(lastCanvas,0,0,c.width,c.height);
+  const d=x.getImageData(0,0,c.width,c.height).data;let sum=0,dark=0,bright=0;const n=d.length/4;
+  for(let i=0;i<d.length;i+=4){const l=d[i]*.299+d[i+1]*.587+d[i+2]*.114;sum+=l;if(l<40)dark++;if(l>215)bright++;}
+  return{avg:sum/n/255*100,dark:dark/n*100,bright:bright/n*100};
+}
+
 function setStage(k,st){const el=document.querySelector('.stage[data-s="'+k+'"]');if(!el)return;el.classList.remove('run','done');if(st)el.classList.add(st);}
 function showErr(m){$('err').textContent=m;$('err').classList.add('on');}
 
+async function loadPois(lat,lon){
+  try{const r=await fetch('/api/poi?lat='+lat+'&lon='+lon);const j=await r.json();
+    if(j.ok&&j.pois&&j.pois.length){$('mapLegend').textContent+='   ·   סמנים סמוכים (OSM): '+j.pois.slice(0,5).map(p=>p.name+((p.dist||0)>0?' '+p.dist+'מ\'':'')).join(' · ');}
+  }catch(e){}
+}
 function initMap(){if(map)return;map=L.map('map',{attributionControl:true}).setView([30,35],2);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);L.Icon.Default.imagePath='vendor/images/';}
 function pin(lat,lon,color,label){const html='<div style="width:16px;height:16px;border-radius:50%;background:'+color+';border:3px solid #fff;box-shadow:0 0 12px '+color+'"></div>';const ic=L.divIcon({html:html,iconSize:[16,16],className:''});const m=L.marker([lat,lon],{icon:ic}).addTo(map);if(label)m.bindPopup(label);markers.push(m);return m;}
 
@@ -204,7 +249,7 @@ async function analyze(file){
   setStage('ai','run');
   let data=null;
   const qs=new URLSearchParams();if(dt)qs.set('ts',dt.y+'-'+String(dt.mo).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0')+' '+String(dt.h).padStart(2,'0')+':'+String(dt.mi).padStart(2,'0')+':'+String(dt.se).padStart(2,'0'));else if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
-  if(exif){if(exif.Make)qs.set('make',String(exif.Make));if(exif.Model)qs.set('model',String(exif.Model));if(exif.Software)qs.set('sw',String(exif.Software));}
+  if(exif){if(exif.Make)qs.set('make',String(exif.Make));if(exif.Model)qs.set('model',String(exif.Model));if(exif.Software)qs.set('sw',String(exif.Software));}if(exif){const ga=parseFloat(exif.GPSAltitude);if(isFinite(ga))qs.set('alt',ga);}
   const url2='/api/analyze?'+qs.toString();
   const post=async()=>{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),170000);try{const r=await fetch(url2,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob,signal:ac.signal});clearTimeout(to);return await r.json();}finally{clearTimeout(to);}};
   try{
@@ -250,6 +295,10 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     html='<h2>לא ניתן לקבוע מיקום</h2><span class="conf none">רמה 1/4 · ללא קביעה</span>'
       +'<p>אין GPS בתמונה והניתוח החזותי לא מצא ראיה מספיק חזקה. למטה — כל הסימנים שזוהו, כפי שהם. לא ננחש בשבילכם.</p>';
   }
+  const cons0=data.consistency||[];
+  const supN=cons0.reduce((a,c)=>a+(c.supports?c.supports.length:0)+(c.sun&&c.sun.ok?1:0)+(c.shadow&&c.shadow.ok?1:0)+(c.weather&&c.weather.ok?1:0)+(c.altitude&&c.altitude.ok?1:0),0);
+  const conN=cons0.reduce((a,c)=>a+(c.contradicts?c.contradicts.length:0)+(c.sun&&c.sun.ok===false?1:0)+(c.shadow&&c.shadow.ok===false?1:0)+(c.weather&&c.weather.ok===false?1:0)+(c.altitude&&c.altitude.ok===false?1:0),0);
+  if(cons0.length)html+='<div class="note">למה: '+(verdict==='confirmed'?'GPS ב-EXIF (הראיה החזקה ביותר)':'הערכה חזותית מאומתת')+' · '+supN+' אימותים תומכים · '+conN+' סתירות. הפירוט בפאנל האימותים למטה.</div>';
   $('verdict').innerHTML=html;
 
   // map
@@ -261,6 +310,7 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     if(pts.length===1)map.setView(pts[0],gps?15:6);else map.fitBounds(pts,{padding:[40,40]});
     setTimeout(()=>map.invalidateSize(),150);
     $('mapLegend').textContent='● אדום = GPS מהתמונה (EXIF)   ● צהוב = אינדיקציה חזותית בלבד';
+    if(gps)loadPois(gps.latitude,gps.longitude);
   } else {$('mapWrap').classList.remove('on');}
 
   // consistency panel
@@ -280,6 +330,7 @@ function render(exif,gps,dtRaw,dt,data,reverse){
         +(c.sun?'<div class="g-why" style="color:'+(c.sun.ok?'#7ddc9a':'#ff8f9a')+'">'+(c.sun.ok?'☀':'⚠')+' '+esc(c.sun.msg)+'</div>':'')
         +(c.shadow?'<div class="g-why" style="color:'+(c.shadow.ok?'#7ddc9a':'#ff8f9a')+'">'+(c.shadow.ok?'▤':'⚠')+' '+esc(c.shadow.msg)+'</div>':'')
         +(c.weather?'<div class="g-why" style="color:'+(c.weather.skipped?'#888':(c.weather.ok?'#7ddc9a':'#ff8f9a'))+'">'+(c.weather.skipped?'☁':'☁')+' מזג אוויר היסטורי: '+esc(c.weather.msg)+'</div>':'')
+        +(c.altitude?'<div class="g-why" style="color:'+(c.altitude.ok?'#7ddc9a':'#ff8f9a')+'">⛰ '+esc(c.altitude.msg)+'</div>':'')
         +'</div>';
     }
     if(cons.some(c=>c.isGps&&((c.contradicts&&c.contradicts.length)||(c.sun&&c.sun.ok===false)))){
@@ -295,7 +346,14 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     const sc=data.signCounts;
     $('sanityPanel').innerHTML+='<div class="note">ספירת רמזים מבניים: '+sc.street_signs+' שלטי רחוב · '+sc.billboards+' שלטי חוצות · '+sc.license_plates+' לוחיות רישוי</div>';
   }
-  runEla();
+  runEla();jpegGhost();
+  const ls=lumStats();
+  if(ls){let est=ls.avg>55?'תומך צילום יום / מקום מואר':ls.avg>=25?'בינוני — לא חותך':'תומך לילה / מקום חשוף';
+    let cross='';const L=data.lighting;
+    if(L==='DAY'&&ls.avg<25)cross=' ⚠ המודל סיווג יום אבל הבהירות נמוכה מאוד — אי-התאמה, בדקו ידנית.';
+    if(L==='NIGHT'&&ls.avg>60)cross=' ⚠ המודל סיווג לילה אבל התמונה בהירה — אי-התאמה, בדקו ידנית.';
+    $('lumNote').textContent='בדיקה דטרמיניסטית (ללא AI): בהירות ממוצעת '+ls.avg.toFixed(0)+'% · '+ls.dark.toFixed(0)+'% פיקסלים כהים · '+ls.bright.toFixed(0)+'% בהירים — '+est+'.'+cross;}
+  else $('lumNote').textContent='';
 
   // EXIF panel
   const rows=[];
@@ -305,10 +363,15 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     put('עדשה',exif.LensModel);put('ISO',exif.ISO);put('חשיפה',exif.ExposureTime);put('צמצם',exif.FNumber);
     put('מוקד',exif.FocalLength);put('רוחב×גובה',(exif.ExifImageWidth||'')+'×'+(exif.ExifImageHeight||''));
     put('GPS',gps?gps.latitude.toFixed(6)+', '+gps.longitude.toFixed(6):null);
+    put('גובה GPS',exif.GPSAltitude!=null?Math.round(parseFloat(exif.GPSAltitude))+" מ'":null);put('פלאש',exif.Flash);put('מוקד 35מ"מ',exif.FocalLengthIn35mmFormat);put('כיוון תמונה',exif.Orientation);
   }
-  if(!rows.length){$('exifPanel').innerHTML='<div class="clue none">לא נמצא מטא-דאטה בתמונה. רוב הרשתות החברתיות (וואטסאפ, אינסטגרם, X) מסירות EXIF לחלוטין — תמונה מקורית ישירות מהמצלמה נותנת הרבה יותר.</div>';}
+  if(!rows.length){$('exifPanel').innerHTML='<div class="summary"><b>סיכום</b> הקובץ נבדק ואין בו מטא-דאטה כלל — אופייני לרשת חברתית, צילום מסך או שידוך. ההיעדר עצמו רמז מקור, לא ראיית מיקום.</div><div class="clue none">לא נמצא מטא-דאטה בתמונה. רוב הרשתות החברתיות (וואטסאפ, אינסטגרם, X) מסירות EXIF לחלוטין — תמונה מקורית ישירות מהמצלמה נותנת הרבה יותר.</div>';}
   else{
-    $('exifPanel').innerHTML='<div class="kv">'+rows.map(r=>'<b>'+esc(r[0])+'</b><span>'+esc(r[1])+'</span>').join('')+'</div>'
+    const found=[];if(exif.Make||exif.Model)found.push('יצרן/דגם');if(dtRaw)found.push('תאריך צילום');if(gps)found.push('GPS');
+    const hints=[];const iso=parseFloat(exif.ISO);if(isFinite(iso)&&iso>=800)hints.push('ISO '+iso+' גבוה — אור סביבה חלש (ערב/פנים)');
+    if(exif.Flash&&/fired|flash fired/i.test(String(exif.Flash)))hints.push('הפלאש פעל — תאורת הסביבה הייתה חלשה');
+    const f35=parseFloat(exif.FocalLengthIn35mmFormat);if(isFinite(f35)){if(f35<=28)hints.push('עדשה רחבה ('+f35+'מ"מ)');else if(f35>=70)hints.push('עדשת טלה ('+f35+'מ"מ)');}
+    $('exifPanel').innerHTML='<div class="summary"><b>סיכום</b> נבדקו '+rows.length+' שדות מטא-דאטה. נמצאו: '+esc(found.join(', ')||'שדות טכניים בלבד')+'.'+(hints.length?' רמזי צילום: '+esc(hints.join(' · '))+'.':'')+'</div><div class="kv">'+rows.map(r=>'<b>'+esc(r[0])+'</b><span>'+esc(r[1])+'</span>').join('')+'</div>'
       +(gps?'':'<div class="note">אין נתוני GPS. ייתכן שהמיקום הושבת במצלמה או שהתמונה עברה שידוך/שיתוף שהסיר EXIF.</div>');
   }
 
@@ -346,6 +409,7 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     el.textContent=v;
   };
   clue('cText',V.text);clue('cRoad',V.road);clue('cEnv',V.environment);clue('cShadow',V.shadow);clue('cCap',V.caption);
+  const SM=data.summaries||{};setSummary('cText',SM.text);setSummary('cRoad',SM.road);setSummary('cEnv',SM.environment);setSummary('cShadow',SM.shadow);setSummary('cCap',SM.caption);setSummary('guesses',SM.guesses);
 
   // guesses
   const g=(V.region&&V.region.guesses)||[];

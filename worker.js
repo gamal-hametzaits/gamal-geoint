@@ -197,6 +197,43 @@ async function weatherCheck(tsParts, lat, lon, sky) {
   } catch (e) { return null; }
 }
 
+async function elevCheck(lat, lon, exifAlt) {
+  try {
+    const r = await fetch('https://api.open-meteo.com/v1/elevation?latitude=' + lat + '&longitude=' + lon, { headers: { 'User-Agent': 'gamal-geoint/1.0' }, signal: AbortSignal.timeout(6000) });
+    const j = await r.json();
+    const t = j.elevation && j.elevation[0];
+    if (typeof t !== 'number') return null;
+    const diff = Math.abs(exifAlt - t);
+    if (diff <= 60) return { ok: true, msg: "גובה GPS (" + Math.round(exifAlt) + "מ') תואם גובה שטח (" + Math.round(t) + "מ')", diff: Math.round(diff) };
+    return { ok: false, msg: "גובה GPS (" + Math.round(exifAlt) + "מ') רחוק " + Math.round(diff) + "מ' מגובה השטח (" + Math.round(t) + "מ') — ייתכן זיוף או קלט GPS רועש", diff: Math.round(diff) };
+  } catch (e) { return null; }
+}
+
+// deterministic per-section analysis summaries (Hebrew): what was checked, what was detected, why (in)sufficient
+function buildSummaries(V, signals, ens, exifTs, skyClass, lightClass) {
+  const S = {};
+  const none = v => !v || /^\s*NONE\.?\s*$/i.test(String(v));
+  const scripts = signals.filter(s => s.type === 'script');
+  if (none(V.text)) S.text = 'נבדקו שלטי רחוב, שמות חנויות, לוחיות רישוי, מדבקות ושלטי חוצות. לא זוהה טקסט קריא — בלי טקסט אי אפשר לזהות שפה או תקן שילוט, ולכן הקטגוריה לא תורמת לקביעה.';
+  else {
+    const nonLatin = scripts.filter(s => s.value !== 'latin');
+    S.text = 'זוהה טקסט קריא בתמונה. ' + (scripts.length ? 'כתבים שזוהו: ' + scripts.map(s => s.value).join(', ') + '. ' : '') +
+      (nonLatin.length ? 'כתב לא-לטיני מצמצם אזור חזק — ההשלכות נבדקות מול כל מועמד בפאנל האימותים.' : 'כתב לטיני בלבד נפוץ בעשרות מדינות — מצמצם מעט.');
+  }
+  const rs = signals.filter(s => ['driving', 'plate', 'platedb', 'centerline'].includes(s.type));
+  if (none(V.road)) S.road = 'נבדקו צד נהיגה, תקן תמרורים, צבע ופורמט לוחיות וקווי דרך. לא זוהה כביש או רכבים ברורים — אין בסיס לרמזי תנועה.';
+  else S.road = 'נבדקו צד נהיגה, תקן תמרורים, צבע/פורמט לוחיות וקווי דרך. ' + (rs.length ? 'חולצו רמזים קשיחים: ' + rs.map(s => s.label).join(' · ') + ' — נשקלים מול כל מועמד בפאנל האימותים.' : 'לא חולץ רמז קשיח (צד נהיגה / צבע לוחית / קו אמצע) — התוכן תורם הקשר בלבד.');
+  S.environment = none(V.environment) ? 'נבדקו צמחייה, תוואי שטח, אדריכלות ואקלים. לא זוהו סממנים ייחודיים.' : 'נבדקו צמחייה, תוואי שטח, חומרי בנייה ואקלים. רמזים סביבתיים הם איכותניים: תומכים או מחלישים אזור, אבל לבד אינם קובעים מיקום.';
+  const lp = [];
+  if (lightClass) lp.push('תאורה סווגה ' + lightClass);
+  if (skyClass) lp.push('שמיים ' + skyClass);
+  S.shadow = (lp.length ? lp.join(' · ') + '. ' : (none(V.shadow) ? 'לא זוהו צללים או שמיים ברורים. ' : '')) + (exifTs ? 'הסיווג שולב באימות האסטרונומי ובבדיקת מזג האוויר בפאנל האימותים.' : 'בלי חותמת זמן ב-EXIF אי אפשר להפוך את זה לאימות אסטרונומי — נשאר רמז איכותי בלבד.');
+  S.caption = 'תיאור סצנה כללי להקשר בלבד — אינו ראיית מיקום כשלעצמו ואינו משפיע על הקביעה.';
+  if (ens && (ens.pass1 || ens.pass2)) S.guesses = 'מעבר 1 העלה ' + ens.pass1 + ' הערכות, מעבר האימות העלה ' + ens.pass2 + ' מדינות, ' + ens.agreements + ' בחפיפה. הערכה לא מאומתת לא מסומנת על המפה.';
+  else S.guesses = 'המודל לא העלה אף הערכת אזור — הראיות חלשות מדי. זו תשובה לגיטימית, לא תקלה.';
+  return S;
+}
+
 async function nominatim(url) {
   const r = await fetch(url, { headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)', 'Accept-Language': 'he,en' } });
   if (!r.ok) throw new Error('nominatim ' + r.status);
@@ -215,6 +252,8 @@ export default {
         const exifTs = parseExifTs(u.searchParams.get('ts'));
         const gpsLat = parseFloat(u.searchParams.get('lat')), gpsLon = parseFloat(u.searchParams.get('lon'));
         const hasGps = isFinite(gpsLat) && isFinite(gpsLon);
+        const gpsAlt = parseFloat(u.searchParams.get('alt'));
+        const hasAlt = isFinite(gpsAlt);
 
         let bin = ''; const CH = 8192;
         for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
@@ -270,6 +309,7 @@ export default {
           g.corroborated = countries2.some(c => p.includes(c.country.toLowerCase()) || c.country.toLowerCase().includes(p));
         }
         out.ensemble = { pass1: guesses.length, pass2: countries2.length, agreements: guesses.filter(g => g.corroborated).length, pass2Countries: countries2 };
+        out.summaries = buildSummaries(out.vision, signals, out.ensemble, exifTs, out.sky, lighting);
 
         // geocode candidates (medium+ only)
         out.geocoded = [];
@@ -288,15 +328,16 @@ export default {
         for (const c of candidates) {
           const v = validateCandidate(c.name === 'EXIF GPS' ? '' : c.name, signals); // GPS has no place-name string; sun check still applies
           const sun = exifTs ? sunCheck(exifTs, c.lat, c.lon, lighting) : null;
-          let shadow = null, weather = null;
+          let shadow = null, weather = null, altitude = null;
+          if (c.isGps && hasAlt) altitude = await elevCheck(c.lat, c.lon, gpsAlt);
           if (exifTs) {
             const tzGuess = Math.round(c.lon / 15);
             const alt = sunPos(Date.UTC(exifTs.y, exifTs.mo - 1, exifTs.d, exifTs.h - tzGuess, exifTs.mi, exifTs.se), c.lat, c.lon).alt;
             shadow = shadowCheck(alt, out.shadowLength);
             weather = await weatherCheck(exifTs, c.lat, c.lon, out.sky);
           }
-          out.consistency.push({ name: c.name, isGps: !!c.isGps, supports: v.supports, contradicts: v.contradicts, sun, shadow, weather });
-          if (c.ref) { c.ref.supports = v.supports; c.ref.contradicts = v.contradicts; c.ref.sun = sun; c.ref.shadow = shadow; c.ref.weather = weather; }
+          out.consistency.push({ name: c.name, isGps: !!c.isGps, supports: v.supports, contradicts: v.contradicts, sun, shadow, weather, altitude });
+          if (c.ref) { c.ref.supports = v.supports; c.ref.contradicts = v.contradicts; c.ref.sun = sun; c.ref.shadow = shadow; c.ref.weather = weather; c.ref.altitude = altitude; }
         }
 
         // verdict ladder: confirmed / strong / weak / none
@@ -323,6 +364,47 @@ export default {
           const j = await nominatim(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
           return Response.json({ ok: true, label: j.display_name || null });
         } catch (e) { return Response.json({ ok: false, error: String(e) }, { status: 502 }); }
+      }
+
+      if (u.pathname === '/api/poi') {
+        const lat = parseFloat(u.searchParams.get('lat')), lon = parseFloat(u.searchParams.get('lon'));
+        if (!isFinite(lat) || !isFinite(lon)) return Response.json({ ok: false, error: 'missing' }, { status: 400 });
+        try {
+          const q = '[out:json][timeout:8];(node(around:250,' + lat + ',' + lon + ')[name];way(around:250,' + lat + ',' + lon + ')[name];);out center tags 12;';
+          let j = null, lastErr = '';
+          for (const method of ['GET', 'POST']) {
+            try {
+              const url = 'https://overpass-api.de/api/interpreter' + (method === 'GET' ? '?data=' + encodeURIComponent(q) : '');
+              const r = await fetch(url, method === 'POST'
+                ? { method, headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)', 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'data=' + encodeURIComponent(q), signal: AbortSignal.timeout(9000) }
+                : { headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)' }, signal: AbortSignal.timeout(9000) });
+              const t = await r.text();
+              j = JSON.parse(t);
+              if (j && Array.isArray(j.elements)) break; else { j = null; lastErr = 'no elements'; }
+            } catch (e) { j = null; lastErr = String(e).slice(0, 120); }
+          }
+          if (!j) {
+            // fallback: fine-grained reverse geocode names the place at the pin
+            const names = [];
+            for (const z of [18, 17]) {
+              try {
+                const rv = await nominatim('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=' + z + '&lat=' + lat + '&lon=' + lon);
+                const nm = rv && rv.name;
+                if (nm && !names.includes(nm)) names.push(nm);
+              } catch (e) { /* optional */ }
+            }
+            return Response.json({ ok: true, pois: names.map(n => ({ name: n, dist: 0 })), via: 'nominatim-reverse', note: 'overpass unavailable: ' + lastErr });
+          }
+          const R = 6371000, p = Math.PI / 180;
+          const hav = (a, b, c, d) => { const x = Math.sin((c - a) * p / 2) ** 2 + Math.cos(a * p) * Math.cos(c * p) * Math.sin((d - b) * p / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); };
+          const seen = new Set();
+          const pois = (j.elements || []).map(e => {
+            const la = e.lat != null ? e.lat : (e.center && e.center.lat), lo = e.lon != null ? e.lon : (e.center && e.center.lon);
+            const name = e.tags && (e.tags['name:he'] || e.tags.name);
+            return { name, dist: (la != null && lo != null) ? Math.round(hav(lat, lon, la, lo)) : null };
+          }).filter(x => x.name && !seen.has(x.name) && seen.add(x.name)).sort((a, b) => (a.dist == null ? 1e9 : a.dist) - (b.dist == null ? 1e9 : b.dist)).slice(0, 8);
+          return Response.json({ ok: true, pois });
+        } catch (e) { return Response.json({ ok: false, error: String(e).slice(0, 200) }, { status: 502 }); }
       }
 
       return env.ASSETS.fetch(req);
