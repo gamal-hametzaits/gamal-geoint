@@ -265,7 +265,17 @@ function render(exif,gps,dtRaw,dt,data,reverse){
   $('sunPanel').innerHTML=sun;
 
   // clue panels
-  const clue=(id,v)=>{const el=$(id);if(!v||(typeof v==='string'&&v.trim().toUpperCase()==='NONE')){el.className='clue none';el.textContent='לא זוהו סימנים בקטגוריה זו.';}else{el.className='clue';el.textContent=v;}};
+  const clue=(id,v)=>{
+    const el=$(id);
+    const clean=s=>String(s).trim().replace(/[.\s]+$/,'').toUpperCase();
+    if(!v||clean(v)==='NONE'){el.className='clue none';el.textContent='לא זוהו סימנים בקטגוריה זו.';return;}
+    el.className='clue';
+    // model sometimes answers with raw JSON - render it as readable key: value lines
+    if(typeof v==='string'&&v.trim().startsWith('{')){
+      try{const j=JSON.parse(v.trim());el.textContent=Object.entries(j).map(([k,val])=>k+': '+(typeof val==='object'?JSON.stringify(val):val)).join('\n');return;}catch(e){}
+    }
+    el.textContent=v;
+  };
   clue('cText',V.text);clue('cRoad',V.road);clue('cEnv',V.environment);clue('cShadow',V.shadow);clue('cCap',V.caption);
 
   // guesses
