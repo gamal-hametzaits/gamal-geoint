@@ -97,7 +97,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
 <div class="stages" id="stages">
   <div class="stage" data-s="exif"><span class="dot"></span> חילוץ מטא-דאטה (EXIF) בדפדפן</div>
   <div class="stage" data-s="up"><span class="dot"></span> העלאת עותק מוקטן לניתוח</div>
-  <div class="stage" data-s="ai"><span class="dot"></span> ניתוח חזותי — 6 שאילתות מומחה</div>
+  <div class="stage" data-s="ai"><span class="dot"></span> ניתוח חזותי — 8 שאילתות, אנסמבל כפול</div>
   <div class="stage" data-s="geo"><span class="dot"></span> גיאוקודינג של ראיות טקסטואליות</div>
   <div class="stage" data-s="sun"><span class="dot"></span> חישוב אסטרונומי — מיקום שמש וצללים</div>
 </div>
@@ -105,12 +105,13 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
 <div id="results">
   <div class="verdict" id="verdict"></div>
   <div id="mapWrap"><div id="map"></div><div class="legend" id="mapLegend"></div></div>
+  <div class="panel" id="consPanel" style="display:none;margin-top:16px"><h3>🧪 אימותים ועקביות</h3><div id="consBody"></div></div>
   <div class="cols" style="margin-top:16px">
-    <div class="panel"><h3>📋 מטא-דאטה (EXIF)</h3><div id="exifPanel"></div></div>
-    <div class="panel"><h3>☀️ חישוב שמש וצללים</h3><div id="sunPanel"></div></div>
+    <div class="panel"><h3>📋 מטא-דאטה (EXIF) <span class="conf high" style="margin:0;font-size:10px">וודאות מכונה</span></h3><div id="exifPanel"></div></div>
+    <div class="panel"><h3>☀️ חישוב שמש וצללים <span class="conf high" style="margin:0;font-size:10px">דטרמיניסטי</span></h3><div id="sunPanel"></div></div>
   </div>
   <div class="cols">
-    <div class="panel"><h3>🪧 שילוט וטקסט</h3><div class="clue" id="cText"></div></div>
+    <div class="panel"><h3>🪧 שילוט וטקסט <span class="conf med" style="margin:0;font-size:10px">OCR חזותי</span></h3><div class="clue" id="cText"></div></div>
     <div class="panel"><h3>🛣️ כביש ורכב</h3><div class="clue" id="cRoad"></div></div>
   </div>
   <div class="cols">
@@ -119,7 +120,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
   </div>
   <div class="cols">
     <div class="panel"><h3>🖼️ תיאור כללי</h3><div class="clue" id="cCap"></div></div>
-    <div class="panel"><h3>🧭 הערכות אזור (זהירות)</h3><div id="guesses"></div></div>
+    <div class="panel"><h3>🧭 הערכות אזור <span class="conf none" style="margin:0;font-size:10px">לא מאומת = לא על המפה</span></h3><div id="guesses"></div></div>
   </div>
   <footer id="foot"></footer>
 </div>
@@ -178,7 +179,8 @@ async function analyze(file){
   setStage('ai','run');
   let data=null;
   try{
-    const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob});
+    const qs=new URLSearchParams();if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
+    const r=await fetch('/api/analyze?'+qs.toString(),{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob});
     data=await r.json();
   }catch(e){showErr('שגיאת רשת בניתוח החזותי: '+e);}
   if(!data||!data.ok){setStage('ai','done');showErr('הניתוח החזותי נכשל: '+esc(data&&data.error||'לא ידוע')+'. מציג מטא-דאטה בלבד.');data={vision:{},geocoded:[],errors:{}};}
@@ -202,23 +204,27 @@ function render(exif,gps,dtRaw,dt,data,reverse){
   $('results').classList.add('on');
   const V=data.vision||{},geo=data.geocoded||[];
   // verdict
+  const verdict=data.verdict||(gps?'confirmed':(geo.length?'weak':'none'));
   let html='';
-  if(gps){
-    html='<h2>מיקום נקבע מהתמונה</h2><span class="conf high">וודאות גבוהה · מקור: GPS ב-EXIF</span>'
+  if(verdict==='confirmed'){
+    html='<h2>מיקום מאושר</h2><span class="conf high">רמה 4/4 · GPS ב-EXIF</span>'
       +'<div class="place">'+esc(reverse||'שם מקום לא נמצא')+'</div>'
       +'<div class="coords">'+gps.latitude.toFixed(6)+', '+gps.longitude.toFixed(6)+'</div>'
-      +'<p>הקואורדינטות הוטמעו בקובץ על ידי המצלמה. זו הראיה החזקה ביותר — אבל שימו לב: EXIF ניתן לזיוף, ולכן שאר הרמזים מוצגים גם הם לבדיקת עקביות.</p>';
-  } else if(geo.length){
-    html='<h2>לא ניתן לקבוע בוודאות — אינדיקציות בלבד</h2><span class="conf med">וודאות בינונית לכל היותר · מקור: ראיה טקסטואלית/חזותית</span>'
-      +'<p>אין GPS בתמונה. הניתוח החזותי מצא רמזים המצביעים על מקומות אפשריים (מסומנים בכתום על המפה) — אין להתייחס אליהם כאל מיקום ודאי.</p>';
+      +'<p>הקואורדינטות הוטמעו בקובץ על ידי המצלמה. זו הראיה החזקה ביותר — אבל EXIF ניתן לזיוף, ולכן כל שאר הרמזים נבדקים מולו בפאנל האימותים למטה.</p>';
+  } else if(verdict==='strong'){
+    html='<h2>אינדיקציה חזקה</h2><span class="conf med">רמה 3/4 · ראיה חזותית מאומתת</span>'
+      +'<p>אין GPS בתמונה, אבל נמצאה ראיה טקסטואלית/חזותית קונקרטית שעברה אימות עקביות (שפה, תקני כביש, שמש) ללא סתירות. הסיכות הכתומות על המפה הן אינדיקציה — לא מיקום ודאי.</p>';
+  } else if(verdict==='weak'){
+    html='<h2>אינדיקציה חלשה בלבד</h2><span class="conf med">רמה 2/4 · רמזים לא מאומתים</span>'
+      +'<p>אין GPS בתמונה. המודל העלה הערכות אזור, אבל הן לא עברו את סף האימות שלנו (חסר אימות צולב או שיש סתירות) — לכן לא מסמנים על המפה. ההערכות מופיעות בפאנל "הערכות אזור" כפי שהן.</p>';
   } else {
-    html='<h2>לא ניתן לקבוע מיקום</h2><span class="conf none">ללא קביעה · מוצגים הרמזים בלבד</span>'
-      +'<p>אין GPS בתמונה והניתוח החזותי לא מצא ראיה מספיק חזקה לקביעת מקום. למטה — כל הסימנים שזוהו, כפי שהם. לא ננחש בשבילכם.</p>';
+    html='<h2>לא ניתן לקבוע מיקום</h2><span class="conf none">רמה 1/4 · ללא קביעה</span>'
+      +'<p>אין GPS בתמונה והניתוח החזותי לא מצא ראיה מספיק חזקה. למטה — כל הסימנים שזוהו, כפי שהם. לא ננחש בשבילכם.</p>';
   }
   $('verdict').innerHTML=html;
 
   // map
-  if(gps||geo.length){
+  if(data.pinsAllowed&&(gps||geo.length)){
     $('mapWrap').classList.add('on');initMap();
     const pts=[];
     if(gps){pin(gps.latitude,gps.longitude,'#E01F2E','<b>GPS EXIF</b><br>'+gps.latitude.toFixed(5)+','+gps.longitude.toFixed(5));pts.push([gps.latitude,gps.longitude]);}
@@ -227,6 +233,29 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     setTimeout(()=>map.invalidateSize(),150);
     $('mapLegend').textContent='● אדום = GPS מהתמונה (EXIF)   ● צהוב = אינדיקציה חזותית בלבד';
   } else {$('mapWrap').classList.remove('on');}
+
+  // consistency panel
+  const cons=data.consistency||[];
+  const ens=data.ensemble;
+  const anyCons=cons.length||((ens&&(ens.pass1||ens.pass2)));
+  if(anyCons){
+    $('consPanel').style.display='block';
+    let cb='';
+    if(ens&&(ens.pass1||ens.pass2)){
+      cb+='<div class="note" style="margin-top:0;margin-bottom:14px">אנסמבל: שני מעברי ניתוח עצמאיים — מעבר 1 העלה '+ens.pass1+' הערכות, מעבר 2 (אימות לפי ראיות קשיחות בלבד) העלה '+ens.pass2+'. '+ens.agreements+' הערכות זכו לאימות צולב.</div>';
+    }
+    for(const c of cons){
+      cb+='<div class="guess"><span class="g-place">'+esc(c.name)+'</span>'+(c.isGps?'<span class="g-conf conf high">EXIF</span>':'')
+        +(c.supports&&c.supports.length?'<div class="g-why" style="color:#7ddc9a">✔ '+c.supports.map(esc).join(' · ')+'</div>':'')
+        +(c.contradicts&&c.contradicts.length?'<div class="g-why" style="color:#ff8f9a">✖ '+c.contradicts.map(esc).join(' · ')+'</div>':'')
+        +(c.sun?'<div class="g-why" style="color:'+(c.sun.ok?'#7ddc9a':'#ff8f9a')+'">'+(c.sun.ok?'☀':'⚠')+' '+esc(c.sun.msg)+'</div>':'')
+        +'</div>';
+    }
+    if(cons.some(c=>c.isGps&&((c.contradicts&&c.contradicts.length)||(c.sun&&c.sun.ok===false)))){
+      cb='<div class="err on" style="display:block;margin:0 0 14px">⚠ נמצאה סתירה מול נתוני ה-EXIF — ייתכן שהמטא-דאטה זויף או ששעון המצלמה סט. היו זהירים עם הקביעה.</div>'+cb;
+    }
+    $('consBody').innerHTML=cb;
+  } else {$('consPanel').style.display='none';}
 
   // EXIF panel
   const rows=[];
@@ -284,7 +313,7 @@ function render(exif,gps,dtRaw,dt,data,reverse){
 
   // footer honesty
   const errs=Object.keys(data.errors||{});
-  $('foot').innerHTML='<b>שקיפות:</b> ניתוח חזותי על ידי <span style="font-family:var(--mono)">'+esc(data.model||'—')+'</span> (Cloudflare Workers AI, חינם · '+(data.neurons?Math.round(data.neurons)+' neurons בניתוח זה':'')+', מכסה יומית חינמית ~10,000 neurons ≈ עשרות ניתוחים). '
+  $('foot').innerHTML='<b>שקיפות:</b> ניתוח חזותי על ידי <span style="font-family:var(--mono)">'+esc(data.model||'—')+'</span> (Cloudflare Workers AI, חינם · '+(data.neurons?Math.round(data.neurons)+' neurons בניתוח זה':'')+', מכסה יומית חינמית ~10,000 neurons ≈ ~22 ניתוחים מלאים ביום). '
     +'מטא-דאטה נקראת בדפדפן שלך ולא נשמרת. התמונה עצמה נשלחת לניתוח ולא נשמרת בשרת. '
     +'מפה: OpenStreetMap · גיאוקודינג: Nominatim. '
     +'<b>כלל ברזל:</b> בלי ראיות — אין סיכה על המפה.'

@@ -1,18 +1,20 @@
-// גיאואינט — image geolocation. Worker: vision battery (Workers AI Moondream) + geocoding proxy.
-// Iron rule: never invent a location. Pins come only from EXIF GPS (client-side) or an explicit,
-// geocoded place name found by the model with at least medium confidence.
+// גיאואינט — image geolocation. Worker: vision ensemble (Workers AI Moondream) +
+// clue-to-region consistency validation + sun-shadow verification + geocoding proxy.
+// Iron rule: never invent a location. Pins come only from EXIF GPS or validated textual evidence.
 const MODEL = '@cf/moondream/moondream3.1-9B-A2B';
 
 const QUERIES = [
   { key: 'caption', task: 'caption', caption_length: 'long' },
   { key: 'text', task: 'query', question: 'Transcribe ALL visible text in the image: street signs, storefronts, license plates, stickers, road markings, billboards. For each item state the language/script it is written in. If there is no readable text, answer exactly: NONE.' },
-  { key: 'road', task: 'query', question: 'Describe road and vehicle clues: which side vehicles drive on, road sign shapes and colors, license plate colors and format, lane marking colors, guardrails, utility poles, vehicle models. Only describe what is actually visible; if a category is not visible, say so.' },
+  { key: 'road', task: 'query', question: 'Describe road and vehicle clues: which side vehicles drive on, road sign shapes and colors, license plate colors and format, lane marking colors (especially the center line color), guardrails, utility poles, vehicle models. Only describe what is actually visible; if a category is not visible, say so.' },
   { key: 'environment', task: 'query', question: 'Describe the environment precisely: vegetation types, terrain, architecture style and building materials, climate indicators, sky, anything that hints at a world region. Only what is visible.' },
-  { key: 'shadow', task: 'query', question: 'Look at shadows and light: which direction do shadows fall relative to the camera, and are they long or short? Estimate the sun position if possible. If there are no visible shadows, answer exactly: NONE.' },
+  { key: 'shadow', task: 'query', question: 'Look at shadows and light: which direction do shadows fall relative to the camera, and are they long, medium, or short? If there are no visible shadows, answer exactly: NONE.' },
+  { key: 'lighting', task: 'query', question: 'Classify the lighting: is this photo taken in bright daylight, overcast daylight, dusk/dawn, or night? Answer with exactly one of: DAY / OVERCAST / DUSK / NIGHT, then one short sentence of justification.' },
   { key: 'region', task: 'query', question: 'As a cautious geolocation analyst: based ONLY on visible evidence, which countries or regions are plausible for this photo? Answer STRICTLY as compact JSON and nothing else: {"guesses":[{"place":"specific place or region or country","confidence":"low|medium|high","evidence":"what in the image supports it"}]}. If the evidence is insufficient, answer {"guesses":[]}. Never claim precision the image does not support.' },
+  // ensemble pass 2: different framing, to cross-check pass 1
+  { key: 'region2', task: 'query', question: 'You are verifying a geolocation. Look only at hard evidence in this image (readable text, sign standards, plate formats, driving side, vegetation zones). List the two most plausible countries. STRICT compact JSON only: {"countries":[{"country":"name","evidence":"visible clue"}]}. If there is no hard evidence, answer {"countries":[]}.' },
 ];
 
-// Assemble Moondream SSE stream into final {answer|caption} + usage
 async function runAI(env, uri, spec) {
   const input = { task: spec.task, image: uri };
   if (spec.question) input.question = spec.question;
@@ -26,12 +28,12 @@ async function runAI(env, uri, spec) {
       try {
         const j = JSON.parse(line.slice(5).trim());
         if (j.usage && j.usage.neurons) neurons = j.usage.neurons;
-        if (j.chunk) { // streaming token chunk (cumulative)
+        if (j.chunk) {
           if (j.chunk.answer) answer = j.chunk.answer;
           if (j.chunk.caption) caption = j.chunk.caption;
           if (j.chunk.reasoning && j.chunk.reasoning.text) reasoning = j.chunk.reasoning.text;
         }
-        if (Array.isArray(j.output)) { // final event: full cumulative chunks; last is complete
+        if (Array.isArray(j.output)) {
           const c = j.output[j.output.length - 1];
           if (c) {
             if (c.answer) answer = c.answer;
@@ -43,20 +45,110 @@ async function runAI(env, uri, spec) {
     }
     return { answer, caption, reasoning, neurons };
   }
-  // non-streaming fallback
   return { answer: res.answer || null, caption: res.caption || res.description || null, reasoning: null, neurons: 0 };
 }
 
+function parseJsonFrom(s) {
+  if (!s) return null;
+  const m = String(s).match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch (e) { return null; }
+}
+
 function parseGuesses(s) {
-  if (!s) return [];
-  const m = s.match(/\{[\s\S]*\}/);
-  if (!m) return [];
-  try {
-    const j = JSON.parse(m[0]);
-    const g = Array.isArray(j.guesses) ? j.guesses : [];
-    return g.filter(x => x && x.place && ['low', 'medium', 'high'].includes(x.confidence))
-      .map(x => ({ place: String(x.place).slice(0, 120), confidence: x.confidence, evidence: String(x.evidence || '').slice(0, 300) }));
-  } catch (e) { return []; }
+  const j = parseJsonFrom(s);
+  const g = j && Array.isArray(j.guesses) ? j.guesses : [];
+  return g.filter(x => x && x.place && ['low', 'medium', 'high'].includes(x.confidence))
+    .map(x => ({ place: String(x.place).slice(0, 120), confidence: x.confidence, evidence: String(x.evidence || '').slice(0, 300) }));
+}
+function parseCountries(s) {
+  const j = parseJsonFrom(s);
+  const c = j && Array.isArray(j.countries) ? j.countries : [];
+  return c.filter(x => x && x.country).map(x => ({ country: String(x.country).slice(0, 80), evidence: String(x.evidence || '').slice(0, 200) }));
+}
+
+// ---------------- deterministic clue extraction ----------------
+const SCRIPT_COUNTRIES = {
+  hebrew: ['israel'],
+  arabic: ['israel','egypt','jordan','lebanon','syria','iraq','saudi','emirates','uae','qatar','kuwait','bahrain','oman','yemen','morocco','algeria','tunisia','libya','palestin'],
+  cyrillic: ['russia','ukraine','belarus','bulgaria','serbia','montenegro','macedonia','kazakhstan','kyrgyzstan','mongolia'],
+  greek: ['greece','cyprus'],
+  thai: ['thailand'],
+  georgian: ['georgia'],
+  armenian: ['armenia'],
+  devanagari: ['india','nepal'],
+  bengali: ['bangladesh','india'],
+  chinese: ['china','taiwan','hong kong','singapore'],
+  japanese: ['japan'],
+  korean: ['korea'],
+  latin: ['europe','united states','usa','uk','france','germany','italy','spain','latin america','australia','canada','turkey','israel'],
+};
+const LEFT_TRAFFIC = ['uk','united kingdom','britain','japan','australia','india','thailand','south africa','cyprus','malta','ireland','indonesia','malaysia','singapore','hong kong','new zealand','kenya','bangladesh','pakistan','sri lanka'];
+
+function extractSignals(vision) {
+  const sig = [];
+  const t = (vision.text || '') + ' ';
+  const r = (vision.road || '') + ' ';
+  for (const [script, countries] of Object.entries(SCRIPT_COUNTRIES)) {
+    if (new RegExp('\\b' + script + '\\b', 'i').test(t)) sig.push({ type: 'script', value: script, countries, label: 'כתב ' + script });
+  }
+  if (/drive[s]? on the left|left[- ]hand (traffic|drive|side)/i.test(r)) sig.push({ type: 'driving', value: 'left', label: 'נהיגה בשמאל' });
+  else if (/drive[s]? on the right|right[- ]hand (traffic|drive|side)/i.test(r)) sig.push({ type: 'driving', value: 'right', label: 'נהיגה בימין' });
+  const plateM = r.match(/(yellow|white|blue|green|black)[ -](?:colored? )?(license )?plate/i);
+  if (plateM) sig.push({ type: 'plate', value: plateM[1].toLowerCase(), label: 'לוחית ' + plateM[1] });
+  if (/yellow (center|centre|centerline|middle)[ -]?line|double yellow/i.test(r)) sig.push({ type: 'centerline', value: 'yellow', label: 'קו אמצע צהוב' });
+  return sig;
+}
+
+function countryMatches(place, countryKey) {
+  return place.toLowerCase().includes(countryKey);
+}
+
+// consistency: returns {supports:[], contradicts:[]} for a candidate place
+function validateCandidate(place, signals) {
+  const out = { supports: [], contradicts: [] };
+  const p = place.toLowerCase();
+  for (const s of signals) {
+    if (s.type === 'script') {
+      const match = s.countries.some(c => countryMatches(p, c));
+      if (match) out.supports.push(s.label + ' תואם');
+      else if (s.value !== 'latin') out.contradicts.push(s.label + ' לא אופייני למקום הזה');
+    }
+    if (s.type === 'driving') {
+      const isLeft = LEFT_TRAFFIC.some(c => countryMatches(p, c));
+      if (s.value === 'left' && isLeft) out.supports.push(s.label + ' תואם');
+      else if (s.value === 'left' && !isLeft) out.contradicts.push(s.label + ' אבל במקום הזה נוהגים בימין');
+      else if (s.value === 'right' && isLeft) out.contradicts.push(s.label + ' אבל במקום הזה נוהגים בשמאל');
+      else if (s.value === 'right' && !isLeft) out.supports.push(s.label + ' תואם');
+    }
+  }
+  return out;
+}
+
+// ---------------- sun math (server side, for verification) ----------------
+function sunPos(ms, lat, lon) {
+  const r = Math.PI / 180, d = ms / 864e5 - .5 + 2440588 - 2451545;
+  const M = r * (357.5291 + .98560028 * d), C = r * (1.9148 * Math.sin(M) + .02 * Math.sin(2 * M) + .0003 * Math.sin(3 * M)), P = r * 102.9372, L = M + C + P + Math.PI;
+  const dec = Math.asin(Math.sin(L) * Math.sin(r * 23.4397)), ra = Math.atan2(Math.sin(L) * Math.cos(r * 23.4397), Math.cos(L));
+  const H = r * (280.16 + 360.9856235 * d) - lon * r - ra;
+  const alt = Math.asin(Math.sin(lat * r) * Math.sin(dec) + Math.cos(lat * r) * Math.cos(dec) * Math.cos(H));
+  return { alt: alt / r };
+}
+function parseExifTs(s) {
+  const m = String(s || '').match(/(\d{4})[:-](\d{2})[:-](\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  return { y: +m[1], mo: +m[2], d: +m[3], h: +m[4], mi: +m[5], se: +m[6] };
+}
+// Verify lighting claim vs sun position at candidate place+time (tz guessed from longitude).
+function sunCheck(tsParts, lat, lon, lightingClass) {
+  if (!tsParts || !lightingClass) return null;
+  const tzGuess = Math.round(lon / 15);
+  const utcMs = Date.UTC(tsParts.y, tsParts.mo - 1, tsParts.d, tsParts.h - tzGuess, tsParts.mi, tsParts.se);
+  const alt = sunPos(utcMs, lat, lon).alt;
+  const L = lightingClass.toUpperCase();
+  if (alt < -8 && (L === 'DAY' || L === 'OVERCAST')) return { ok: false, alt: +alt.toFixed(1), msg: 'סתירה: לפי חותמת הזמן במקום הזה היה חושך (שמש ' + alt.toFixed(0) + '° מתחת לאופק), אבל התמונה צולמה באור יום' };
+  if (alt > 5 && L === 'NIGHT') return { ok: false, alt: +alt.toFixed(1), msg: 'סתירה: לפי חותמת הזמן השמש הייתה ' + alt.toFixed(0) + '° מעל האופק, אבל התמונה נראית כצילום לילה' };
+  return { ok: true, alt: +alt.toFixed(1), msg: 'תואם: גובה שמש מחושב ' + alt.toFixed(0) + '° מול סוג התאורה בתמונה' };
 }
 
 async function nominatim(url) {
@@ -73,6 +165,11 @@ export default {
         const buf = new Uint8Array(await req.arrayBuffer());
         if (buf.length < 2000) return Response.json({ ok: false, error: 'empty_image' }, { status: 400 });
         if (buf.length > 8_000_000) return Response.json({ ok: false, error: 'too_large' }, { status: 413 });
+        // optional client-supplied EXIF facts for server-side verification (client stays source of truth for display)
+        const exifTs = parseExifTs(u.searchParams.get('ts'));
+        const gpsLat = parseFloat(u.searchParams.get('lat')), gpsLon = parseFloat(u.searchParams.get('lon'));
+        const hasGps = isFinite(gpsLat) && isFinite(gpsLon);
+
         let bin = ''; const CH = 8192;
         for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
         const mime = req.headers.get('content-type') || 'image/jpeg';
@@ -83,26 +180,67 @@ export default {
           try {
             const r = await runAI(env, uri, spec);
             out.neurons += r.neurons || 0;
-            if (spec.key === 'region') {
-              out.vision.region = { raw: r.answer, guesses: parseGuesses(r.answer) };
-            } else {
+            if (spec.key === 'region') out.vision.region = { raw: r.answer, guesses: parseGuesses(r.answer) };
+            else if (spec.key === 'region2') out.vision.region2 = { raw: r.answer, countries: parseCountries(r.answer) };
+            else {
               out.vision[spec.key] = r.answer || r.caption || null;
               if (spec.key === 'caption') out.vision.caption_reasoning = r.reasoning;
             }
-          } catch (e) {
-            out.errors[spec.key] = String(e).slice(0, 200);
-          }
+          } catch (e) { out.errors[spec.key] = String(e).slice(0, 200); }
         }
 
-        // Geocode only concrete place guesses with medium+ confidence (indication pins, never verdicts)
+        // lighting class
+        const lm = (out.vision.lighting || '').match(/\b(DAY|OVERCAST|DUSK|NIGHT)\b/i);
+        const lighting = lm ? lm[1].toUpperCase() : null;
+        out.lighting = lighting;
+
+        // deterministic clue extraction + ensemble merge
+        const signals = extractSignals(out.vision);
+        out.signals = signals;
+        const guesses = (out.vision.region ? out.vision.region.guesses : []);
+        const countries2 = (out.vision.region2 ? out.vision.region2.countries : []);
+        // ensemble agreement: boost guesses corroborated by pass 2
+        for (const g of guesses) {
+          const p = g.place.toLowerCase();
+          g.corroborated = countries2.some(c => p.includes(c.country.toLowerCase()) || c.country.toLowerCase().includes(p));
+        }
+        out.ensemble = { pass1: guesses.length, pass2: countries2.length, agreements: guesses.filter(g => g.corroborated).length, pass2Countries: countries2 };
+
+        // geocode candidates (medium+ only)
         out.geocoded = [];
-        for (const g of (out.vision.region ? out.vision.region.guesses : [])) {
+        for (const g of guesses) {
           if (g.confidence === 'low') continue;
           try {
             const j = await nominatim('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(g.place));
-            if (j && j[0]) out.geocoded.push({ place: g.place, confidence: g.confidence, evidence: g.evidence, lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name });
+            if (j && j[0]) out.geocoded.push({ place: g.place, confidence: g.confidence, evidence: g.evidence, corroborated: !!g.corroborated, lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name });
           } catch (e) { /* geocode optional */ }
         }
+
+        // consistency validation per geocoded candidate + EXIF GPS itself
+        const candidates = out.geocoded.map(g => ({ name: g.place, lat: g.lat, lon: g.lon, ref: g }));
+        if (hasGps) candidates.push({ name: 'EXIF GPS', lat: gpsLat, lon: gpsLon, isGps: true });
+        out.consistency = [];
+        for (const c of candidates) {
+          const v = validateCandidate(c.name === 'EXIF GPS' ? '' : c.name, signals); // GPS has no place-name string; sun check still applies
+          const sun = exifTs ? sunCheck(exifTs, c.lat, c.lon, lighting) : null;
+          out.consistency.push({ name: c.name, isGps: !!c.isGps, supports: v.supports, contradicts: v.contradicts, sun });
+          if (c.ref) { c.ref.supports = v.supports; c.ref.contradicts = v.contradicts; c.ref.sun = sun; }
+        }
+
+        // verdict ladder: confirmed / strong / weak / none
+        let verdict = 'none';
+        if (hasGps) verdict = 'confirmed';
+        else {
+          const strong = out.geocoded.find(g =>
+            (g.confidence === 'high' || (g.confidence === 'medium' && (g.corroborated || (g.supports && g.supports.length))) )
+            && !(g.contradicts && g.contradicts.length)
+            && !(g.sun && g.sun.ok === false));
+          if (strong) verdict = 'strong';
+          else if (out.geocoded.length || guesses.length) verdict = 'weak';
+        }
+        out.verdict = verdict;
+        // pins only for confirmed/strong
+        out.pinsAllowed = (verdict === 'confirmed' || verdict === 'strong');
         return Response.json(out);
       }
 
