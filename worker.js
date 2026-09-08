@@ -190,7 +190,7 @@ async function weatherCheck(tsParts, lat, lon, sky) {
     const hour = Math.min(23, tsParts.h);
     const cloud = cc[hour], rain = pr && pr[hour] > 0;
     let ok = null, msg;
-    if (sky === 'CLEAR') { ok = cloud <= 30; msg = 'שמיים: התמונה מראה בהיר, הארכיון אומר ' + cloud + '% עננות'; }
+    if (sky === 'CLEAR') { ok = cloud <= 45; msg = 'שמיים: התמונה מראה בהיר, הארכיון אומר ' + cloud + '% עננות'; }
     else if (sky === 'OVERCAST') { ok = cloud >= 70; msg = 'שמיים: התמונה מראה מעונן, הארכיון אומר ' + cloud + '% עננות'; }
     else { ok = cloud > 20 && cloud < 85; msg = 'שמיים: התמונה מראה מעונן חלקית, הארכיון אומר ' + cloud + '% עננות'; }
     return { ok, cloud, rain, msg: msg + (rain ? ' + משקעים' : ''), source: 'open-meteo archive' };
@@ -215,6 +215,13 @@ export default {
         const exifTs = parseExifTs(u.searchParams.get('ts'));
         const gpsLat = parseFloat(u.searchParams.get('lat')), gpsLon = parseFloat(u.searchParams.get('lon'));
         const hasGps = isFinite(gpsLat) && isFinite(gpsLon);
+
+        let bin = ''; const CH = 8192;
+        for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
+        const mime = req.headers.get('content-type') || 'image/jpeg';
+        const uri = 'data:' + (mime.startsWith('image/') ? mime : 'image/jpeg') + ';base64,' + btoa(bin);
+
+        const out = { ok: true, model: MODEL, vision: {}, neurons: 0, errors: {} };
         // EXIF sanity / provenance flags (deterministic)
         const exifSanity = [];
         const mk = u.searchParams.get('make') || '', md = u.searchParams.get('model') || '', sw = u.searchParams.get('sw') || '';
@@ -224,13 +231,6 @@ export default {
         if (mk && md && md.toLowerCase().startsWith(mk.toLowerCase())) exifSanity.push({ ok: true, msg: 'יצרן/דגם עקביים: ' + mk + ' / ' + md });
         if (!mk && !md) exifSanity.push({ ok: false, msg: 'אין פרטי מצלמה בכלל — אופייני לצילום מסך או תמונה שעברה עריכה/שידוך' });
         out.exifSanity = exifSanity;
-
-        let bin = ''; const CH = 8192;
-        for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
-        const mime = req.headers.get('content-type') || 'image/jpeg';
-        const uri = 'data:' + (mime.startsWith('image/') ? mime : 'image/jpeg') + ';base64,' + btoa(bin);
-
-        const out = { ok: true, model: MODEL, vision: {}, neurons: 0, errors: {} };
         for (const spec of QUERIES) {
           try {
             const r = await runAI(env, uri, spec);
