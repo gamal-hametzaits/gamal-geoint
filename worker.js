@@ -9,7 +9,8 @@ const QUERIES = [
   { key: 'road', task: 'query', question: 'Describe road and vehicle clues: which side vehicles drive on, road sign shapes and colors, license plate colors and format, lane marking colors (especially the center line color), guardrails, utility poles, vehicle models. Only describe what is actually visible; if a category is not visible, say so.' },
   { key: 'environment', task: 'query', question: 'Describe the environment precisely: vegetation types, terrain, architecture style and building materials, climate indicators, sky, anything that hints at a world region. Only what is visible.' },
   { key: 'shadow', task: 'query', question: 'Look at shadows and light: which direction do shadows fall relative to the camera, and are they long, medium, or short? If there are no visible shadows, answer exactly: NONE.' },
-  { key: 'lighting', task: 'query', question: 'Classify the lighting: is this photo taken in bright daylight, overcast daylight, dusk/dawn, or night? Answer with exactly one of: DAY / OVERCAST / DUSK / NIGHT, then one short sentence of justification.' },
+  { key: 'lighting', task: 'query', question: 'Classify the scene lighting and sky. Answer in this exact format on the first line: LIGHT: DAY|OVERCAST|DUSK|NIGHT SKY: CLEAR|PARTLY|OVERCAST. Then one short sentence of justification.' },
+  { key: 'signs', task: 'query', question: 'Count the man-made location clues visible: how many street signs, billboards with text, and license plates can you see? Answer STRICTLY as compact JSON: {"street_signs":N,"billboards":N,"license_plates":N}. Numbers only as values.' },
   { key: 'region', task: 'query', question: 'As a cautious geolocation analyst: based ONLY on visible evidence, which countries or regions are plausible for this photo? Answer STRICTLY as compact JSON and nothing else: {"guesses":[{"place":"specific place or region or country","confidence":"low|medium|high","evidence":"what in the image supports it"}]}. If the evidence is insufficient, answer {"guesses":[]}. Never claim precision the image does not support.' },
   // ensemble pass 2: different framing, to cross-check pass 1
   { key: 'region2', task: 'query', question: 'You are verifying a geolocation. Look only at hard evidence in this image (readable text, sign standards, plate formats, driving side, vegetation zones). List the two most plausible countries. STRICT compact JSON only: {"countries":[{"country":"name","evidence":"visible clue"}]}. If there is no hard evidence, answer {"countries":[]}.' },
@@ -96,6 +97,12 @@ function extractSignals(vision) {
   else if (/drive[s]? on the right|right[- ]hand (traffic|drive|side)/i.test(r)) sig.push({ type: 'driving', value: 'right', label: 'נהיגה בימין' });
   const plateM = r.match(/(yellow|white|blue|green|black)[ -](?:colored? )?(license )?plate/i);
   if (plateM) sig.push({ type: 'plate', value: plateM[1].toLowerCase(), label: 'לוחית ' + plateM[1] });
+  // plate format database (color -> countries where this is standard)
+  const PLATE_DB = {
+    yellow: ['israel','netherlands','united kingdom','uk','luxembourg','japan','colombia'],
+    blue: ['israel','europe','france','germany','italy','spain','poland'], // eu band / old IL
+  };
+  if (plateM && PLATE_DB[plateM[1].toLowerCase()]) sig.push({ type: 'platedb', value: plateM[1].toLowerCase(), countries: PLATE_DB[plateM[1].toLowerCase()], label: 'פורמט לוחית ' + plateM[1] });
   if (/yellow (center|centre|centerline|middle)[ -]?line|double yellow/i.test(r)) sig.push({ type: 'centerline', value: 'yellow', label: 'קו אמצע צהוב' });
   return sig;
 }
@@ -113,6 +120,11 @@ function validateCandidate(place, signals) {
       const match = s.countries.some(c => countryMatches(p, c));
       if (match) out.supports.push(s.label + ' תואם');
       else if (s.value !== 'latin') out.contradicts.push(s.label + ' לא אופייני למקום הזה');
+    }
+    if (s.type === 'platedb') {
+      const match = s.countries.some(c => countryMatches(p, c));
+      if (match) out.supports.push(s.label + ' תואם למאגר הפורמטים');
+      else out.contradicts.push(s.label + ' לא תקנית במקום הזה לפי מאגר הפורמטים');
     }
     if (s.type === 'driving') {
       const isLeft = LEFT_TRAFFIC.some(c => countryMatches(p, c));
@@ -140,6 +152,17 @@ function parseExifTs(s) {
   return { y: +m[1], mo: +m[2], d: +m[3], h: +m[4], mi: +m[5], se: +m[6] };
 }
 // Verify lighting claim vs sun position at candidate place+time (tz guessed from longitude).
+function shadowCheck(alt, shadowLength) {
+  if (alt == null || !shadowLength) return null;
+  // expected sun elevation ranges for shadow lengths
+  const exp = { short: [50, 90], medium: [22, 55], long: [0, 25] };
+  const r = exp[shadowLength];
+  if (!r) return null;
+  if (alt >= r[0] && alt <= r[1]) return { ok: true, msg: 'אורך הצללים (' + shadowLength + ') תואם גובה שמש מחושב ' + alt.toFixed(0) + '°' };
+  if (alt < 0) return null; // night handled elsewhere
+  return { ok: false, msg: 'סתירת צללים: בתמונה צללים ' + shadowLength + ' (מצופה ' + r[0] + '-' + r[1] + '°) אבל הגובה המחושב ' + alt.toFixed(0) + '°' };
+}
+
 function sunCheck(tsParts, lat, lon, lightingClass) {
   if (!tsParts || !lightingClass) return null;
   const tzGuess = Math.round(lon / 15);
@@ -149,6 +172,29 @@ function sunCheck(tsParts, lat, lon, lightingClass) {
   if (alt < -8 && (L === 'DAY' || L === 'OVERCAST')) return { ok: false, alt: +alt.toFixed(1), msg: 'סתירה: לפי חותמת הזמן במקום הזה היה חושך (שמש ' + alt.toFixed(0) + '° מתחת לאופק), אבל התמונה צולמה באור יום' };
   if (alt > 5 && L === 'NIGHT') return { ok: false, alt: +alt.toFixed(1), msg: 'סתירה: לפי חותמת הזמן השמש הייתה ' + alt.toFixed(0) + '° מעל האופק, אבל התמונה נראית כצילום לילה' };
   return { ok: true, alt: +alt.toFixed(1), msg: 'תואם: גובה שמש מחושב ' + alt.toFixed(0) + '° מול סוג התאורה בתמונה' };
+}
+
+async function weatherCheck(tsParts, lat, lon, sky) {
+  if (!tsParts || !sky) return null;
+  const pad = n => String(n).padStart(2, '0');
+  const date = tsParts.y + '-' + pad(tsParts.mo) + '-' + pad(tsParts.d);
+  // archive lags ~5 days; skip if too recent
+  const ageDays = (Date.now() - Date.UTC(tsParts.y, tsParts.mo - 1, tsParts.d)) / 864e5;
+  if (ageDays < 6) return { skipped: true, msg: 'ארכיון מזג האוויר מתעדכן בהפרש של ~5 ימים — אין נתונים לתאריך הזה עדיין' };
+  if (ageDays > 365 * 30) return { skipped: true, msg: 'תאריך מחוץ לטווח הארכיון' };
+  try {
+    const r = await fetch('https://archive-api.open-meteo.com/v1/archive?latitude=' + lat + '&longitude=' + lon + '&start_date=' + date + '&end_date=' + date + '&hourly=cloud_cover,precipitation&timezone=auto', { headers: { 'User-Agent': 'gamal-geoint/1.0' } });
+    const j = await r.json();
+    const cc = j.hourly && j.hourly.cloud_cover, pr = j.hourly && j.hourly.precipitation;
+    if (!cc) return null;
+    const hour = Math.min(23, tsParts.h);
+    const cloud = cc[hour], rain = pr && pr[hour] > 0;
+    let ok = null, msg;
+    if (sky === 'CLEAR') { ok = cloud <= 30; msg = 'שמיים: התמונה מראה בהיר, הארכיון אומר ' + cloud + '% עננות'; }
+    else if (sky === 'OVERCAST') { ok = cloud >= 70; msg = 'שמיים: התמונה מראה מעונן, הארכיון אומר ' + cloud + '% עננות'; }
+    else { ok = cloud > 20 && cloud < 85; msg = 'שמיים: התמונה מראה מעונן חלקית, הארכיון אומר ' + cloud + '% עננות'; }
+    return { ok, cloud, rain, msg: msg + (rain ? ' + משקעים' : ''), source: 'open-meteo archive' };
+  } catch (e) { return null; }
 }
 
 async function nominatim(url) {
@@ -169,6 +215,15 @@ export default {
         const exifTs = parseExifTs(u.searchParams.get('ts'));
         const gpsLat = parseFloat(u.searchParams.get('lat')), gpsLon = parseFloat(u.searchParams.get('lon'));
         const hasGps = isFinite(gpsLat) && isFinite(gpsLon);
+        // EXIF sanity / provenance flags (deterministic)
+        const exifSanity = [];
+        const mk = u.searchParams.get('make') || '', md = u.searchParams.get('model') || '', sw = u.searchParams.get('sw') || '';
+        if (sw && /photoshop|lightroom|snapseed|gimp|pixlr|canva|afterlight|vsco/i.test(sw)) exifSanity.push({ ok: false, msg: 'שדה התוכנה מראה עריכה: ' + sw });
+        if (!exifTs && hasGps) exifSanity.push({ ok: false, msg: 'יש GPS אבל אין חותמת זמן — חריג' });
+        if (exifTs && !hasGps) exifSanity.push({ ok: true, msg: 'חותמת זמן בלי GPS — דפוס נפוץ ולגיטימי' });
+        if (mk && md && md.toLowerCase().startsWith(mk.toLowerCase())) exifSanity.push({ ok: true, msg: 'יצרן/דגם עקביים: ' + mk + ' / ' + md });
+        if (!mk && !md) exifSanity.push({ ok: false, msg: 'אין פרטי מצלמה בכלל — אופייני לצילום מסך או תמונה שעברה עריכה/שידוך' });
+        out.exifSanity = exifSanity;
 
         let bin = ''; const CH = 8192;
         for (let i = 0; i < buf.length; i += CH) bin += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
@@ -193,6 +248,12 @@ export default {
         const lm = (out.vision.lighting || '').match(/\b(DAY|OVERCAST|DUSK|NIGHT)\b/i);
         const lighting = lm ? lm[1].toUpperCase() : null;
         out.lighting = lighting;
+        const sm = (out.vision.lighting || '').match(/SKY:\s*(CLEAR|PARTLY|OVERCAST)/i);
+        out.sky = sm ? sm[1].toUpperCase() : null;
+        const sj = parseJsonFrom(out.vision.signs);
+        out.signCounts = sj && typeof sj === 'object' ? { street_signs: +sj.street_signs || 0, billboards: +sj.billboards || 0, license_plates: +sj.license_plates || 0 } : null;
+        const shM = (out.vision.shadow || '').match(/\b(very short|short|medium|long)\b/i);
+        out.shadowLength = shM ? shM[1].toLowerCase().replace('very ', '') : null;
 
         // deterministic clue extraction + ensemble merge
         const signals = extractSignals(out.vision);
@@ -223,8 +284,15 @@ export default {
         for (const c of candidates) {
           const v = validateCandidate(c.name === 'EXIF GPS' ? '' : c.name, signals); // GPS has no place-name string; sun check still applies
           const sun = exifTs ? sunCheck(exifTs, c.lat, c.lon, lighting) : null;
-          out.consistency.push({ name: c.name, isGps: !!c.isGps, supports: v.supports, contradicts: v.contradicts, sun });
-          if (c.ref) { c.ref.supports = v.supports; c.ref.contradicts = v.contradicts; c.ref.sun = sun; }
+          let shadow = null, weather = null;
+          if (exifTs) {
+            const tzGuess = Math.round(c.lon / 15);
+            const alt = sunPos(Date.UTC(exifTs.y, exifTs.mo - 1, exifTs.d, exifTs.h - tzGuess, exifTs.mi, exifTs.se), c.lat, c.lon).alt;
+            shadow = shadowCheck(alt, out.shadowLength);
+            weather = await weatherCheck(exifTs, c.lat, c.lon, out.sky);
+          }
+          out.consistency.push({ name: c.name, isGps: !!c.isGps, supports: v.supports, contradicts: v.contradicts, sun, shadow, weather });
+          if (c.ref) { c.ref.supports = v.supports; c.ref.contradicts = v.contradicts; c.ref.sun = sun; c.ref.shadow = shadow; c.ref.weather = weather; }
         }
 
         // verdict ladder: confirmed / strong / weak / none
@@ -234,7 +302,7 @@ export default {
           const strong = out.geocoded.find(g =>
             (g.confidence === 'high' || (g.confidence === 'medium' && (g.corroborated || (g.supports && g.supports.length))) )
             && !(g.contradicts && g.contradicts.length)
-            && !(g.sun && g.sun.ok === false));
+            && !(g.sun && g.sun.ok === false) && !(g.shadow && g.shadow.ok === false) && !(g.weather && g.weather.ok === false));
           if (strong) verdict = 'strong';
           else if (out.geocoded.length || guesses.length || countries2.length) verdict = 'weak';
         }
