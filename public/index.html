@@ -157,9 +157,11 @@ function runEla(){
   re.onload=()=>{
     const rc=document.createElement('canvas');rc.width=w;rc.height=h2;rc.getContext('2d').drawImage(re,0,0);
     const a=src.getContext('2d').getImageData(0,0,w,h2).data, b=rc.getContext('2d').getImageData(0,0,w,h2).data;
-    cv.width=w;cv.height=h2;const ctx=cv.getContext('2d');const out=ctx.createImageData(w,h2);
+    cv.width=w;cv.height=h2;const ctx=cv.getContext('2d');
+    ctx.globalAlpha=0.3;ctx.drawImage(src,0,0);ctx.globalAlpha=1;
+    const out=ctx.createImageData(w,h2);
     let sum=0;
-    for(let i=0;i<a.length;i+=4){const d=Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]);sum+=d;const v=Math.min(255,d*6);out.data[i]=v;out.data[i+1]=v*0.4;out.data[i+2]=v*0.4;out.data[i+3]=255;}
+    for(let i=0;i<a.length;i+=4){const d=Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]);sum+=d;const v=Math.min(255,d*6);out.data[i]=255;out.data[i+1]=60;out.data[i+2]=60;out.data[i+3]=Math.min(255,v*2);}
     ctx.putImageData(out,0,0);
     const avg=sum/(w*h2*3);
     note.textContent=avg<2?'התמונה כבר דחוסה בחוזקה (ELA שטוח) — אופייני לתמונה מרשת חברתית או שידוך חוזר. אין אינדיקציה לעריכה מקומית.':avg<8?'רמת שגיאה אחידה יחסית — אין כתמים חמים בולטים שמרמזים על עריכה מקומית.':'נמצאו אזורים עם רמת שגיאה גבוהה (כתמים בהירים באדום) — ייתכן שעריכה מקומית בוצעה שם. בדקו את האזורים הבהירים.';
@@ -201,7 +203,7 @@ async function analyze(file){
   // 3. vision battery
   setStage('ai','run');
   let data=null;
-  const qs=new URLSearchParams();if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
+  const qs=new URLSearchParams();if(dt)qs.set('ts',dt.y+'-'+String(dt.mo).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0')+' '+String(dt.h).padStart(2,'0')+':'+String(dt.mi).padStart(2,'0')+':'+String(dt.se).padStart(2,'0'));else if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
   if(exif){if(exif.Make)qs.set('make',String(exif.Make));if(exif.Model)qs.set('model',String(exif.Model));if(exif.Software)qs.set('sw',String(exif.Software));}
   const url2='/api/analyze?'+qs.toString();
   const post=async()=>{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),170000);try{const r=await fetch(url2,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob,signal:ac.signal});clearTimeout(to);return await r.json();}finally{clearTimeout(to);}};
