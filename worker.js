@@ -228,7 +228,11 @@ export default {
         if (sw && /photoshop|lightroom|snapseed|gimp|pixlr|canva|afterlight|vsco/i.test(sw)) exifSanity.push({ ok: false, msg: 'שדה התוכנה מראה עריכה: ' + sw });
         if (!exifTs && hasGps) exifSanity.push({ ok: false, msg: 'יש GPS אבל אין חותמת זמן — חריג' });
         if (exifTs && !hasGps) exifSanity.push({ ok: true, msg: 'חותמת זמן בלי GPS — דפוס נפוץ ולגיטימי' });
-        if (mk && md && md.toLowerCase().startsWith(mk.toLowerCase())) exifSanity.push({ ok: true, msg: 'יצרן/דגם עקביים: ' + mk + ' / ' + md });
+        if (mk && md) {
+          const a = md.toLowerCase(), b = mk.toLowerCase();
+          if (a.startsWith(b) || a.includes(b) || b.startsWith(a)) exifSanity.push({ ok: true, msg: 'יצרן/דגם עקביים: ' + mk + ' / ' + md });
+          else exifSanity.push({ ok: true, msg: 'יצרן/דגם: ' + mk + ' / ' + md + ' (קיימים, בדיקת עקביות לא חלה)' });
+        }
         if (!mk && !md) exifSanity.push({ ok: false, msg: 'אין פרטי מצלמה בכלל — אופייני לצילום מסך או תמונה שעברה עריכה/שידוך' });
         out.exifSanity = exifSanity;
         for (const spec of QUERIES) {

@@ -290,7 +290,7 @@ function render(exif,gps,dtRaw,dt,data,reverse){
 
   // EXIF sanity + sign counts
   const san=data.exifSanity||[];
-  $('sanityPanel').innerHTML=san.length?san.map(s=>'<div class="g-why" style="color:'+(s.ok?'#7ddc9a':'#f1c40f')+';margin-top:8px">'+(s.ok?'✔':'⚠')+' '+esc(s.msg)+'</div>').join(''):'<div class="clue none">אין נתוני EXIF לבדיקת שפיות.</div>';
+  $('sanityPanel').innerHTML=san.length?san.map(s=>'<div class="g-why" style="color:'+(s.ok?'#7ddc9a':'#f1c40f')+';margin-top:8px">'+(s.ok?'✔':'⚠')+' '+esc(s.msg)+'</div>').join(''):(exif?'<div class="clue none">נבדק — לא נמצאו חריגות שפיות במטא-דאטה הקיים.</div>':'<div class="clue none">אין נתוני EXIF לבדיקת שפיות.</div>');
   if(data.signCounts&&(data.signCounts.street_signs+data.signCounts.billboards+data.signCounts.license_plates)>0){
     const sc=data.signCounts;
     $('sanityPanel').innerHTML+='<div class="note">ספירת רמזים מבניים: '+sc.street_signs+' שלטי רחוב · '+sc.billboards+' שלטי חוצות · '+sc.license_plates+' לוחיות רישוי</div>';
