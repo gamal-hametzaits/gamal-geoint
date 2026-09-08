@@ -236,7 +236,7 @@ export default {
             && !(g.contradicts && g.contradicts.length)
             && !(g.sun && g.sun.ok === false));
           if (strong) verdict = 'strong';
-          else if (out.geocoded.length || guesses.length) verdict = 'weak';
+          else if (out.geocoded.length || guesses.length || countries2.length) verdict = 'weak';
         }
         out.verdict = verdict;
         // pins only for confirmed/strong
