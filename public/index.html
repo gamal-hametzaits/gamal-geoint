@@ -178,11 +178,14 @@ async function analyze(file){
   // 3. vision battery
   setStage('ai','run');
   let data=null;
+  const qs=new URLSearchParams();if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
+  const url2='/api/analyze?'+qs.toString();
+  const post=async()=>{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),170000);try{const r=await fetch(url2,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob,signal:ac.signal});clearTimeout(to);return await r.json();}finally{clearTimeout(to);}};
   try{
-    const qs=new URLSearchParams();if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
-    const r=await fetch('/api/analyze?'+qs.toString(),{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob});
-    data=await r.json();
-  }catch(e){showErr('שגיאת רשת בניתוח החזותי: '+e);}
+    data=await post();
+  }catch(e1){
+    try{await new Promise(r=>setTimeout(r,3000));data=await post();}catch(e2){showErr('שגיאת רשת בניתוח החזותי: '+e2);}
+  }
   if(!data||!data.ok){setStage('ai','done');showErr('הניתוח החזותי נכשל: '+esc(data&&data.error||'לא ידוע')+'. מציג מטא-דאטה בלבד.');data={vision:{},geocoded:[],errors:{}};}
   else setStage('ai','done');
 
