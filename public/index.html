@@ -20,7 +20,7 @@ h1{font-size:clamp(52px,9vw,104px);font-weight:900;line-height:1;margin:14px 0 4
 .ticker{margin-top:26px;font-family:var(--mono);font-size:12px;color:#555;direction:ltr;white-space:nowrap;overflow:hidden;mask-image:linear-gradient(90deg,transparent,black 15%,black 85%,transparent)}
 .ticker span{display:inline-block;animation:tick 40s linear infinite}
 @keyframes tick{from{transform:translateX(-50%)}to{transform:translateX(0)}}
-.drop{margin:46px auto 0;border:1.5px dashed #3a3a3a;border-radius:18px;padding:56px 30px;text-align:center;cursor:pointer;transition:.25s;background:rgba(18,18,18,.6);position:relative;overflow:hidden}
+.drop{display:block;margin:46px auto 0;border:1.5px dashed #3a3a3a;border-radius:18px;padding:56px 30px;text-align:center;cursor:pointer;transition:.25s;background:rgba(18,18,18,.6);position:relative;overflow:hidden}
 .drop:hover,.drop.over{border-color:var(--red);box-shadow:0 0 44px rgba(224,31,46,.18) inset,0 0 24px rgba(224,31,46,.12)}
 .drop .big{font-size:22px;font-weight:600}
 .drop .small{color:var(--dim);font-size:13px;margin-top:10px;font-family:var(--mono)}
@@ -199,6 +199,7 @@ async function analyze(file){
 }
 
 function render(exif,gps,dtRaw,dt,data,reverse){
+  $('results').classList.add('on');
   const V=data.vision||{},geo=data.geocoded||[];
   // verdict
   let html='';
