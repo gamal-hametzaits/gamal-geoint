@@ -1,0 +1,12 @@
+name = "gamal-geoint"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+account_id = "ab9b55e00637deafc81be8a2e155b1c7"
+workers_dev = true
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[ai]
+binding = "AI"
