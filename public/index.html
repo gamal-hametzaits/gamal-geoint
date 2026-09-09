@@ -103,6 +103,8 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
 </label>
 <div class="err" id="err"></div>
 <img class="preview" id="preview" style="display:none">
+<canvas class="preview" id="previewOv" style="display:none"></canvas>
+<div class="note" id="ovNote" style="display:none;text-align:center">מסגרות אדומות: כלי רכב שאותרו (detect) · עיגולים כחולים: לוחיות רישוי שאותרו (point) — איתור מיקומי של המודל, לא קריאת תוכן</div>
 
 <div class="stages" id="stages">
   <div class="stage" data-s="exif"><span class="dot"></span> חילוץ מטא-דאטה (EXIF) בדפדפן</div>
@@ -238,7 +240,7 @@ function pin(lat,lon,color,label){const html='<div style="width:16px;height:16px
 
 async function analyze(file){
   $('err').classList.remove('on');$('results').classList.remove('on');
-  $('preview').style.display='none';markers=[];clientClues=[];lastData=null;
+  $('preview').style.display='none';$('previewOv').style.display='none';$('ovNote').style.display='none';markers=[];clientClues=[];lastData=null;
   $('stages').classList.add('on');['exif','up','ai','geo','sun'].forEach(s=>setStage(s,''));
   setStage('exif','run');
 
@@ -277,6 +279,8 @@ async function analyze(file){
   if(!data||!data.ok){setStage('ai','done');showErr('הניתוח החזותי נכשל: '+esc(data&&data.error||'לא ידוע')+'. מציג מטא-דאטה בלבד.');data={vision:{},geocoded:[],errors:{}};}
   else setStage('ai','done');
 
+  drawDetectOverlay(data);
+
   // 4. reverse-geocode EXIF GPS / use geocoded textual evidence
   setStage('geo','run');
   let reverse=null;
@@ -289,6 +293,24 @@ async function analyze(file){
   setStage('sun','run');
   render(exif,gps,dtRaw,dt,data,reverse);
   setStage('sun','done');
+}
+
+function drawDetectOverlay(data){
+  const ov=$('previewOv'),note=$('ovNote');
+  const dv=data&&data.vision&&data.vision.detectVehicles,pp=data&&data.vision&&data.vision.platePoints;
+  const boxes=(dv&&dv.boxes)||[],pts=(pp&&pp.points)||[];
+  if(!lastCanvas||(!boxes.length&&!pts.length)){ov.style.display='none';note.style.display='none';return;}
+  const w=lastCanvas.width,hc=lastCanvas.height;
+  ov.width=w;ov.height=hc;
+  const x=ov.getContext('2d');
+  x.drawImage(lastCanvas,0,0);
+  const lw=Math.max(3,Math.round(w/300));
+  x.lineWidth=lw;x.strokeStyle='#ff4545';
+  for(const b of boxes){if(!b||!isFinite(b.x_min))continue;x.strokeRect(b.x_min*w,b.y_min*hc,(b.x_max-b.x_min)*w,(b.y_max-b.y_min)*hc);}
+  x.strokeStyle='#4aa3ff';
+  for(const p of pts){if(!p||!isFinite(p.x))continue;x.beginPath();x.arc(p.x*w,p.y*hc,Math.max(7,Math.round(w/110)),0,7);x.stroke();}
+  $('preview').style.display='none';
+  ov.style.display='block';note.style.display='block';
 }
 
 const ROLE_HE={support:'תומך',contradict:'סותר',signal:'מצמצם',context:'הקשר'};

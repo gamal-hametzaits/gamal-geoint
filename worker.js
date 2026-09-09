@@ -49,6 +49,15 @@ async function runAI(env, uri, spec) {
   return { answer: res.answer || null, caption: res.caption || res.description || null, reasoning: null, neurons: 0 };
 }
 
+async function runVisionTask(env, uri, task, target) {
+  const input = { task, image: uri, stream: false };
+  if (target) input.target = target;
+  const r = await env.AI.run(MODEL, input);
+  const res = r && r.result ? r.result : (r || {});
+  const neurons = r && r.usage && r.usage.neurons ? r.usage.neurons : 0;
+  return { res, neurons };
+}
+
 function parseJsonFrom(s) {
   if (!s) return null;
   const m = String(s).match(/\{[\s\S]*\}/);
@@ -246,7 +255,7 @@ function buildClues(o) {
   for (const s of (o.exifSanity || [])) add('מטא-דאטה ומקור', s.msg, 'גבוהה', s.ok ? 'support' : 'contradict', s.ok ? 'שדה מכונה, לא הוכחת אותנטיות' : 'חריגת שפיות — לבדוק ידנית', 'EXIF');
   // language / signage
   for (const s of (o.signals || [])) {
-    if (s.type === 'script') add('טקסט ושפה', 'זוהה כתב ' + s.value + ' בטקסט ששוהחזר', 'בינונית', 'signal', 'מצמצם ל: ' + s.countries.slice(0, 6).join(', ') + (s.countries.length > 6 ? '…' : '') + ' — כתב לבדו אינו קובע מדינה', 'חזותי+דטרמיניסטי');
+    if (s.type === 'script') add('טקסט ושפה', 'זוהה כתב ' + s.value + ' בטקסט ששוחזר', 'בינונית', 'signal', 'מצמצם ל: ' + s.countries.slice(0, 6).join(', ') + (s.countries.length > 6 ? '…' : '') + ' — כתב לבדו אינו קובע מדינה', 'חזותי+דטרמיניסטי');
     if (s.type === 'driving') add('כבישים וסימונים', 'נהיגה ב' + (s.value === 'left' ? 'שמאל' : 'ימין') + ' לפי התמונה', 'בינונית', 'signal', s.value === 'left' ? 'מצמצם ל-~75 מדינות עם נהיגת שמאל' : 'רוב העולם נוהג בימין — צמצום חלש', 'חזותי+דטרמיניסטי');
     if (s.type === 'platedb') add('רכבים ולוחיות', s.label + ' תקנית ב: ' + s.countries.slice(0, 5).join(', '), 'בינונית', 'signal', 'פורמט לוחית חופף בין מדינות — ראיה תומכת, לא מכרעת', 'מאגר פורמטים');
     if (s.type === 'plate' && !(o.signals || []).some(x => x.type === 'platedb')) add('רכבים ולוחיות', s.label + ' זוהתה', 'נמוכה', 'signal', 'צבע לוחית ללא פורמט מלא — רמז חלש', 'חזותי');
@@ -255,6 +264,11 @@ function buildClues(o) {
   // objects
   if (o.signCounts && (o.signCounts.street_signs + o.signCounts.billboards + o.signCounts.license_plates) > 0)
     add('עצמים', 'ספירת מודל: ' + o.signCounts.street_signs + ' שלטי רחוב · ' + o.signCounts.billboards + ' שלטי חוצות · ' + o.signCounts.license_plates + ' לוחיות', 'בינונית', 'context', 'ספירה חזותית עלולה לפספס או להגזים; משקל הרמזים נמדד בתוכנם, לא במספרם', 'חזותי');
+  if (o.detectVehicles) add('עצמים', o.detectVehicles.count > 0 ? 'איתור מיקומי (detect): ' + o.detectVehicles.count + ' כלי רכב סומנו בתיבות על התמונה' : 'איתור מיקומי (detect): לא סומנו כלי רכב בתמונה', 'בינונית', 'context', 'ספירה אוטומטית עלולה לפספס רכבים חבויים או חתוכים; נוכחות רכב היא הקשר, לא ראיית מיקום', 'חזותי-detect');
+  if (o.platePoints) {
+    const pn = o.platePoints.count, sc2 = o.signCounts ? o.signCounts.license_plates : null;
+    add('רכבים ולוחיות', pn > 0 ? 'אותרו ' + pn + ' לוחיות רישוי בניקוד מיקומי (point)' + (sc2 != null ? ' — ספירת המודל הכללית: ' + sc2 : '') : 'ניקוד מיקומי (point) לא איתר לוחיות רישוי', 'בינונית', pn > 0 ? 'signal' : 'context', 'איתור נקודתי אינו קריאת מספרי לוחית; תוכן הלוחיות מנותח בשאילת הטקסט ובמאגר הפורמטים', 'חזותי-point');
+  }
   // lighting / weather
   if (o.lighting) add('תאורה וצללים', 'תאורה סווגה ' + o.lighting + (o.sky ? ' · שמיים ' + o.sky : ''), 'בינונית', 'context', 'סיווג מודל; אומת מול הארכיון וגובה השמש כשיש חותמת זמן', 'חזותי');
   if (o.shadowLength) add('תאורה וצללים', 'צללים באורך ' + o.shadowLength, 'בינונית', 'signal', 'אורך צל + חותמת זמן מאפשרים אימות גובה שמש', 'חזותי');
@@ -327,6 +341,20 @@ export default {
           } catch (e) { out.errors[spec.key] = String(e).slice(0, 200); }
         }
 
+        // grounded object localization: vehicle boxes + license-plate points (moondream detect/point, non-streaming)
+        try {
+          const d = await runVisionTask(env, uri, 'detect', 'car');
+          out.neurons += d.neurons || 0;
+          const objs = Array.isArray(d.res.objects) ? d.res.objects : [];
+          out.vision.detectVehicles = { target: 'car', count: objs.length, boxes: objs.slice(0, 24) };
+        } catch (e) { out.errors.detect = String(e).slice(0, 200); }
+        try {
+          const p = await runVisionTask(env, uri, 'point', 'license plate');
+          out.neurons += p.neurons || 0;
+          const pts = Array.isArray(p.res.points) ? p.res.points : [];
+          out.vision.platePoints = { target: 'license plate', count: pts.length, points: pts.slice(0, 24) };
+        } catch (e) { out.errors.platePoints = String(e).slice(0, 200); }
+
         // lighting class
         const lm = (out.vision.lighting || '').match(/\b(DAY|OVERCAST|DUSK|NIGHT)\b/i);
         const lighting = lm ? lm[1].toUpperCase() : null;
@@ -382,6 +410,7 @@ export default {
 
         out.clues = buildClues({
           vision: out.vision, signals, exifSanity, signCounts: out.signCounts,
+          detectVehicles: out.vision.detectVehicles || null, platePoints: out.vision.platePoints || null,
           lighting, sky: out.sky, shadowLength: out.shadowLength, consistency: out.consistency,
           regionGuesses: guesses, hasGps, gpsLat, gpsLon, hasTs: !!exifTs
         });
