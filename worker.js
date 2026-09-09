@@ -68,13 +68,20 @@ function parseJsonFrom(s) {
 function parseGuesses(s) {
   const j = parseJsonFrom(s);
   const g = j && Array.isArray(j.guesses) ? j.guesses : [];
-  return g.filter(x => x && x.place && ['low', 'medium', 'high'].includes(x.confidence))
-    .map(x => ({ place: String(x.place).slice(0, 120), confidence: x.confidence, evidence: String(x.evidence || '').slice(0, 300) }));
+  return g.map(x => {
+    if (typeof x === 'string' && x.trim()) return { place: x.trim().slice(0, 120), confidence: 'low', evidence: '' };
+    if (x && x.place && ['low', 'medium', 'high'].includes(x.confidence)) return { place: String(x.place).slice(0, 120), confidence: x.confidence, evidence: String(x.evidence || '').slice(0, 300) };
+    return null;
+  }).filter(Boolean);
 }
 function parseCountries(s) {
   const j = parseJsonFrom(s);
   const c = j && Array.isArray(j.countries) ? j.countries : [];
-  return c.filter(x => x && x.country).map(x => ({ country: String(x.country).slice(0, 80), evidence: String(x.evidence || '').slice(0, 200) }));
+  return c.map(x => {
+    if (typeof x === 'string' && x.trim()) return { country: x.trim().slice(0, 80), evidence: '' };
+    if (x && x.country) return { country: String(x.country).slice(0, 80), evidence: String(x.evidence || '').slice(0, 200) };
+    return null;
+  }).filter(Boolean);
 }
 
 // ---------------- deterministic clue extraction ----------------
