@@ -234,6 +234,46 @@ function buildSummaries(V, signals, ens, exifTs, skyClass, lightClass) {
   return S;
 }
 
+// consolidated clue ledger: every detected clue with confidence, role, and inference limit.
+// roles: support (תומך במיקום), contradict (סותר), signal (רמז מצמצם), context (הקשר בלבד)
+function buildClues(o) {
+  const C = [];
+  const add = (cat, text, conf, role, limit, source) => C.push({ cat, text, conf, role, limit, source });
+  const V = o.vision || {};
+  // metadata / provenance
+  if (o.hasGps) add('מטא-דאטה ומקור', 'קואורדינטות GPS מוטמעות בקובץ: ' + o.gpsLat.toFixed(5) + ', ' + o.gpsLon.toFixed(5), 'גבוהה', 'support', 'EXIF ניתן לזיוף — לכן אומת מול שמש, מזג אוויר וגובה שטח', 'EXIF');
+  if (o.hasTs) add('מטא-דאטה ומקור', 'חותמת זמן צילום קיימת', 'גבוהה', 'signal', 'שעון המצלמה עלול לסטות; ההשלכות נבדקו אסטרונומית', 'EXIF');
+  for (const s of (o.exifSanity || [])) add('מטא-דאטה ומקור', s.msg, 'גבוהה', s.ok ? 'support' : 'contradict', s.ok ? 'שדה מכונה, לא הוכחת אותנטיות' : 'חריגת שפיות — לבדוק ידנית', 'EXIF');
+  // language / signage
+  for (const s of (o.signals || [])) {
+    if (s.type === 'script') add('טקסט ושפה', 'זוהה כתב ' + s.value + ' בטקסט ששוהחזר', 'בינונית', 'signal', 'מצמצם ל: ' + s.countries.slice(0, 6).join(', ') + (s.countries.length > 6 ? '…' : '') + ' — כתב לבדו אינו קובע מדינה', 'חזותי+דטרמיניסטי');
+    if (s.type === 'driving') add('כבישים וסימונים', 'נהיגה ב' + (s.value === 'left' ? 'שמאל' : 'ימין') + ' לפי התמונה', 'בינונית', 'signal', s.value === 'left' ? 'מצמצם ל-~75 מדינות עם נהיגת שמאל' : 'רוב העולם נוהג בימין — צמצום חלש', 'חזותי+דטרמיניסטי');
+    if (s.type === 'platedb') add('רכבים ולוחיות', s.label + ' תקנית ב: ' + s.countries.slice(0, 5).join(', '), 'בינונית', 'signal', 'פורמט לוחית חופף בין מדינות — ראיה תומכת, לא מכרעת', 'מאגר פורמטים');
+    if (s.type === 'plate' && !(o.signals || []).some(x => x.type === 'platedb')) add('רכבים ולוחיות', s.label + ' זוהתה', 'נמוכה', 'signal', 'צבע לוחית ללא פורמט מלא — רמז חלש', 'חזותי');
+    if (s.type === 'centerline') add('כבישים וסימונים', s.label, 'בינונית', 'signal', 'קו צהוב נפוץ בישראל ובצפון אמריקה — צמצום חלש', 'חזותי');
+  }
+  // objects
+  if (o.signCounts && (o.signCounts.street_signs + o.signCounts.billboards + o.signCounts.license_plates) > 0)
+    add('עצמים', 'ספירת מודל: ' + o.signCounts.street_signs + ' שלטי רחוב · ' + o.signCounts.billboards + ' שלטי חוצות · ' + o.signCounts.license_plates + ' לוחיות', 'בינונית', 'context', 'ספירה חזותית עלולה לפספס או להגזים; משקל הרמזים נמדד בתוכנם, לא במספרם', 'חזותי');
+  // lighting / weather
+  if (o.lighting) add('תאורה וצללים', 'תאורה סווגה ' + o.lighting + (o.sky ? ' · שמיים ' + o.sky : ''), 'בינונית', 'context', 'סיווג מודל; אומת מול הארכיון וגובה השמש כשיש חותמת זמן', 'חזותי');
+  if (o.shadowLength) add('תאורה וצללים', 'צללים באורך ' + o.shadowLength, 'בינונית', 'signal', 'אורך צל + חותמת זמן מאפשרים אימות גובה שמש', 'חזותי');
+  for (const c of (o.consistency || [])) {
+    const where = c.isGps ? ' (מול EXIF GPS)' : ' (מול ' + c.name + ')';
+    if (c.sun) add('תאורה וצללים', c.sun.msg + where, 'גבוהה', c.sun.ok ? 'support' : 'contradict', 'מבוסס על חותמת הזמן ועל אזור זמן משוער מקו האורך', 'אסטרונומי');
+    if (c.shadow) add('תאורה וצללים', c.shadow.msg + where, 'גבוהה', c.shadow.ok ? 'support' : 'contradict', 'טווחי גובה-שמש מקורבים', 'אסטרונומי');
+    if (c.weather && !c.weather.skipped) add('מזג אוויר', c.weather.msg + where, 'גבוהה', c.weather.ok ? 'support' : 'contradict', 'ארכיון מדידות; תאימות עננות היא תומכת, לא מכרעת', 'open-meteo archive');
+    if (c.weather && c.weather.skipped) add('מזג אוויר', c.weather.msg, 'גבוהה', 'context', 'אין נתוני ארכיון לתאריך', 'open-meteo archive');
+    if (c.altitude) add('מטא-דאטה ומקור', c.altitude.msg + where, 'גבוהה', c.altitude.ok ? 'support' : 'contradict', 'גובה GPS בטלפונים רועש (±50מ׳) — סובלנות 60מ׳', 'open-meteo elevation');
+  }
+  // environment qualitative
+  const none = v => !v || /^\s*NONE\.?\s*$/i.test(String(v));
+  if (!none(V.environment)) add('צמחייה ושטח', 'זוהו מאפייני סביבה ואדריכלות (פירוט בפאנל)', 'בינונית', 'context', 'רמזים איכותניים — תומכים או מחלישים, אינם קובעים לבד', 'חזותי');
+  // model guesses
+  for (const g of (o.regionGuesses || [])) add('הערכות מודל', 'הערכה: ' + g.place + (g.corroborated ? ' (אומתה במעבר שני)' : '') + (g.evidence ? ' — ' + g.evidence : ''), ({ high: 'גבוהה', medium: 'בינונית', low: 'נמוכה' })[g.confidence] || 'נמוכה', 'signal', 'הערכת מודל בלבד; לא מאומתת = לא מסומנת על המפה', 'חזותי');
+  return C;
+}
+
 async function nominatim(url) {
   const r = await fetch(url, { headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)', 'Accept-Language': 'he,en' } });
   if (!r.ok) throw new Error('nominatim ' + r.status);
@@ -339,6 +379,12 @@ export default {
           out.consistency.push({ name: c.name, isGps: !!c.isGps, supports: v.supports, contradicts: v.contradicts, sun, shadow, weather, altitude });
           if (c.ref) { c.ref.supports = v.supports; c.ref.contradicts = v.contradicts; c.ref.sun = sun; c.ref.shadow = shadow; c.ref.weather = weather; c.ref.altitude = altitude; }
         }
+
+        out.clues = buildClues({
+          vision: out.vision, signals, exifSanity, signCounts: out.signCounts,
+          lighting, sky: out.sky, shadowLength: out.shadowLength, consistency: out.consistency,
+          regionGuesses: guesses, hasGps, gpsLat, gpsLon, hasTs: !!exifTs
+        });
 
         // verdict ladder: confirmed / strong / weak / none
         let verdict = 'none';

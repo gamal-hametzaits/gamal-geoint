@@ -57,6 +57,14 @@ h1{font-size:clamp(52px,9vw,104px);font-weight:900;line-height:1;margin:14px 0 4
 .clue.none{color:#666;font-style:italic}
 .summary{font-family:var(--mono);font-size:11.5px;color:#b9b9b9;border-right:2px solid var(--red-dim);padding-right:10px;line-height:1.8;margin-bottom:12px}
 .summary b{color:var(--red);font-weight:600}
+.ledger-cat{margin-top:14px;font-weight:800;font-size:13.5px;color:var(--text)}
+.ledger-row{display:flex;gap:8px;align-items:flex-start;padding:7px 0;border-bottom:1px solid #1a1a1a;font-size:13px;line-height:1.6}
+.ledger-row .lim{color:#666;font-size:12px}
+.badge{font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid;white-space:nowrap;flex-shrink:0;margin-top:1px}
+.badge.support{color:#7ddc9a;border-color:#2ecc7155}
+.badge.contradict{color:#ff8f9a;border-color:#E01F2E55}
+.badge.signal{color:#f1c40f;border-color:#f1c40f44}
+.badge.context{color:#888;border-color:#333}
 #map{height:340px;border-radius:14px;border:1px solid var(--line);margin-top:16px;direction:ltr;filter:grayscale(.55) invert(.92) hue-rotate(180deg) brightness(.9)}
 #mapWrap{display:none}
 #mapWrap.on{display:block}
@@ -108,6 +116,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
   <div class="verdict" id="verdict"></div>
   <div id="mapWrap"><div id="map"></div><div class="legend" id="mapLegend"></div></div>
   <div class="panel" id="consPanel" style="display:none;margin-top:16px"><h3>🧪 אימותים ועקביות</h3><div id="consBody"></div></div>
+  <div class="panel" id="ledgerPanel" style="display:none;margin-top:16px"><h3>🧵 כל קצוות החוט — סיכום מאוחד</h3><div class="note" style="margin-top:0">כל רמז שזוהה, עם רמת הביטחון, התפקיד שלו (תומך / סותר / מצמצם / הקשר) והגבלת ההסקה שלו. אין כאן רמזים שהומצאו — מה שלא זוהה, לא מופיע.</div><div id="ledgerBody"></div></div>
   <div class="cols" style="margin-top:16px">
     <div class="panel"><h3>📋 מטא-דאטה (EXIF) <span class="conf high" style="margin:0;font-size:10px">וודאות מכונה</span></h3><div id="exifPanel"></div></div>
     <div class="panel"><h3>☀️ חישוב שמש וצללים <span class="conf high" style="margin:0;font-size:10px">דטרמיניסטי</span></h3><div id="sunPanel"></div></div>
@@ -149,7 +158,7 @@ function parseExifDate(s){if(!s)return null;const m=String(s).match(/^(\d{4}):(\
 // EXIF timestamps lack a timezone — convention is camera-local time. We state that honestly and
 // compute sun for the candidate location assuming the timestamp is local solar clock time there.
 
-let map=null,markers=[],lastCanvas=null;
+let map=null,markers=[],lastCanvas=null,clientClues=[],lastData=null;
 // Error Level Analysis: re-encode at q75, amplify residual — uniform noise = natural re-save, hot spots = edited regions
 function runEla(){
   const cv=$('ela'),note=$('elaNote');
@@ -167,7 +176,11 @@ function runEla(){
     for(let i=0;i<a.length;i+=4){const d=Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2]);sum+=d;const v=Math.min(255,d*6);out.data[i]=255;out.data[i+1]=60;out.data[i+2]=60;out.data[i+3]=Math.min(255,v*2);}
     ctx.putImageData(out,0,0);
     const avg=sum/(w*h2*3);
-    note.textContent=avg<2?'התמונה כבר דחוסה בחוזקה (ELA שטוח) — אופייני לתמונה מרשת חברתית או שידוך חוזר. אין אינדיקציה לעריכה מקומית.':avg<8?'רמת שגיאה אחידה יחסית — אין כתמים חמים בולטים שמרמזים על עריכה מקומית.':'נמצאו אזורים עם רמת שגיאה גבוהה (כתמים בהירים באדום) — ייתכן שעריכה מקומית בוצעה שם. בדקו את האזורים הבהירים.';
+    const elaTxt=avg<2?'התמונה כבר דחוסה בחוזקה (ELA שטוח) — אופייני לתמונה מרשת חברתית או שידוך חוזר. אין אינדיקציה לעריכה מקומית.':avg<8?'רמת שגיאה אחידה יחסית — אין כתמים חמים בולטים שמרמזים על עריכה מקומית.':'נמצאו אזורים עם רמת שגיאה גבוהה (כתמים בהירים באדום) — ייתכן שעריכה מקומית בוצעה שם. בדקו את האזורים הבהירים.';
+    note.textContent=elaTxt;
+    clientClues=clientClues.filter(c=>c.source!=='ELA');
+    clientClues.push({cat:'פורנזיקת תמונה',text:'ELA: '+elaTxt,conf:'בינונית',role:avg>=8?'contradict':'context',limit:'ELA אינו מוכיח עריכה — דחיסה חוזרת משטחת אותו',source:'ELA'});
+    if(lastData)renderLedger(lastData);
   };
   re.src=src.toDataURL('image/jpeg',0.75);
 }
@@ -193,9 +206,13 @@ async function jpegGhost(){
   }
   let ghost=-1;for(let i=1;i<qs.length-1;i++){if(res[i]<res[i-1]&&res[i]<res[i+1]&&res[i]<res[qs.length-1]*0.9){ghost=i;break;}}
   const curve=qs.map((q,i)=>'q'+q+': '+res[i].toFixed(1)).join(' · ');
-  note.textContent=(ghost>0
+  const gTxt=(ghost>0
     ?'JPEG ghost: מינימום מקומי בעקומה סביב איכות '+qs[ghost]+' — חתימת דחיסה חוזרת: התמונה כנראה נערכה או נשמרה מחדש מעל שמירה קודמת. '
     :'JPEG ghost: אין מינימום מקומי חריג בעקומה — אין סימן ברור לשמירה חוזרת (לא שולל עריכה). ')+'(שארית: '+curve+')';
+  note.textContent=gTxt;
+  clientClues=clientClues.filter(c=>c.source!=='ghost');
+  clientClues.push({cat:'פורנזיקת תמונה',text:gTxt,conf:'בינונית',role:ghost>0?'contradict':'context',limit:'עקומת שארית על עותק מוקטן — סימן סטטיסטי, לא הוכחה',source:'ghost'});
+  if(lastData)renderLedger(lastData);
 }
 
 // deterministic luminance histogram — AI-independent day/night cross-check
@@ -221,7 +238,7 @@ function pin(lat,lon,color,label){const html='<div style="width:16px;height:16px
 
 async function analyze(file){
   $('err').classList.remove('on');$('results').classList.remove('on');
-  $('preview').style.display='none';markers=[];
+  $('preview').style.display='none';markers=[];clientClues=[];lastData=null;
   $('stages').classList.add('on');['exif','up','ai','geo','sun'].forEach(s=>setStage(s,''));
   setStage('exif','run');
 
@@ -272,6 +289,23 @@ async function analyze(file){
   setStage('sun','run');
   render(exif,gps,dtRaw,dt,data,reverse);
   setStage('sun','done');
+}
+
+const ROLE_HE={support:'תומך',contradict:'סותר',signal:'מצמצם',context:'הקשר'};
+function renderLedger(data){
+  const clues=(data&&data.clues||[]).concat(clientClues);
+  const panel=$('ledgerPanel'),body=$('ledgerBody');
+  if(!clues.length){panel.style.display='none';return;}
+  panel.style.display='block';
+  const cats=[];for(const c of clues)if(!cats.includes(c.cat))cats.push(c.cat);
+  body.innerHTML=cats.map(cat=>{
+    const rows=clues.filter(c=>c.cat===cat).map(c=>
+      '<div class="ledger-row"><span class="badge '+c.role+'">'+ROLE_HE[c.role]+'</span>'
+      +'<div><div>'+esc(c.text)+' <span style="color:#777;font-size:11px">(ביטחון: '+esc(c.conf)+' · מקור: '+esc(c.source||'')+')</span></div>'
+      +(c.limit?'<div class="lim">◦ '+(c.role==='contradict'?'לא מוכיח זיוף לבד. ':'')+esc(c.limit)+'</div>':'')
+      +'</div></div>').join('');
+    return '<div class="ledger-cat">'+esc(cat)+'</div>'+rows;
+  }).join('');
 }
 
 function render(exif,gps,dtRaw,dt,data,reverse){
@@ -346,13 +380,16 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     const sc=data.signCounts;
     $('sanityPanel').innerHTML+='<div class="note">ספירת רמזים מבניים: '+sc.street_signs+' שלטי רחוב · '+sc.billboards+' שלטי חוצות · '+sc.license_plates+' לוחיות רישוי</div>';
   }
+  lastData=data;renderLedger(data);
   runEla();jpegGhost();
   const ls=lumStats();
   if(ls){let est=ls.avg>55?'תומך צילום יום / מקום מואר':ls.avg>=25?'בינוני — לא חותך':'תומך לילה / מקום חשוף';
     let cross='';const L=data.lighting;
     if(L==='DAY'&&ls.avg<25)cross=' ⚠ המודל סיווג יום אבל הבהירות נמוכה מאוד — אי-התאמה, בדקו ידנית.';
     if(L==='NIGHT'&&ls.avg>60)cross=' ⚠ המודל סיווג לילה אבל התמונה בהירה — אי-התאמה, בדקו ידנית.';
-    $('lumNote').textContent='בדיקה דטרמיניסטית (ללא AI): בהירות ממוצעת '+ls.avg.toFixed(0)+'% · '+ls.dark.toFixed(0)+'% פיקסלים כהים · '+ls.bright.toFixed(0)+'% בהירים — '+est+'.'+cross;}
+    $('lumNote').textContent='בדיקה דטרמיניסטית (ללא AI): בהירות ממוצעת '+ls.avg.toFixed(0)+'% · '+ls.dark.toFixed(0)+'% פיקסלים כהים · '+ls.bright.toFixed(0)+'% בהירים — '+est+'.'+cross;
+    clientClues=clientClues.filter(c=>c.source!=='lum');
+    clientClues.push({cat:'תאורה וצללים',text:'בהירות ממוצעת '+ls.avg.toFixed(0)+'% (כהים '+ls.dark.toFixed(0)+'% · בהירים '+ls.bright.toFixed(0)+'%) — '+est+(cross?' אי-התאמה מול סיווג המודל':''),conf:'גבוהה',role:cross?'contradict':'signal',limit:'ממוצע בהירות לא מבחין פנים/חוץ; משלים את סיווג המודל',source:'lum'});}
   else $('lumNote').textContent='';
 
   // EXIF panel
