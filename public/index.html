@@ -271,13 +271,14 @@ async function analyze(file){
   const qs=new URLSearchParams();if(dt)qs.set('ts',dt.y+'-'+String(dt.mo).padStart(2,'0')+'-'+String(dt.d).padStart(2,'0')+' '+String(dt.h).padStart(2,'0')+':'+String(dt.mi).padStart(2,'0')+':'+String(dt.se).padStart(2,'0'));else if(dtRaw)qs.set('ts',String(dtRaw));if(gps){qs.set('lat',gps.latitude);qs.set('lon',gps.longitude);}
   if(exif){if(exif.Make)qs.set('make',String(exif.Make));if(exif.Model)qs.set('model',String(exif.Model));if(exif.Software)qs.set('sw',String(exif.Software));}if(exif){const ga=parseFloat(exif.GPSAltitude);if(isFinite(ga))qs.set('alt',ga);}
   const url2='/api/analyze?'+qs.toString();
-  const post=async()=>{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),170000);try{const r=await fetch(url2,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob,signal:ac.signal});clearTimeout(to);return await r.json();}finally{clearTimeout(to);}};
+  const post=async()=>{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),170000);try{const r=await fetch(url2,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob,signal:ac.signal});return await r.json();}finally{clearTimeout(to);}};
   try{
     data=await post();
   }catch(e1){
-    try{await new Promise(r=>setTimeout(r,3000));data=await post();}catch(e2){showErr('שגיאת רשת בניתוח החזותי: '+e2);}
+    // Never resubmit an AI request automatically: a timeout may have consumed quota.
+    data={ok:false,error:e1.name==='AbortError'?'הבקשה לא הסתיימה בזמן; לא בוצע ניסיון נוסף אוטומטי':'החיבור נותק; לא בוצע ניסיון נוסף אוטומטי'};
   }
-  if(!data||!data.ok){setStage('ai','done');showErr('הניתוח החזותי נכשל: '+esc(data&&data.error||'לא ידוע')+'. מציג מטא-דאטה בלבד.');data={vision:{},geocoded:[],errors:{}};}
+  if(!data||!data.ok){setStage('ai','done');showErr('הניתוח החזותי נכשל: '+String(data&&data.error||'לא ידוע')+'. מציג מטא-דאטה בלבד.');data={vision:{},geocoded:[],errors:{}};}
   else setStage('ai','done');
 
   drawDetectOverlay(data);
