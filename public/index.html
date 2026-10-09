@@ -162,6 +162,7 @@ function parseExifDate(s){if(!s)return null;const m=String(s).match(/^(\d{4}):(\
 // compute sun for the candidate location assuming the timestamp is local solar clock time there.
 
 let map=null,markers=[],lastCanvas=null,clientClues=[],lastData=null;
+let analysisBusy=false,previewUrl=null;
 // Error Level Analysis: re-encode at q75, amplify residual — uniform noise = natural re-save, hot spots = edited regions
 function runEla(){
   const cv=$('ela'),note=$('elaNote');
@@ -240,8 +241,24 @@ function initMap(){if(map)return;map=L.map('map',{attributionControl:true}).setV
 function pin(lat,lon,color,label){const html='<div style="width:16px;height:16px;border-radius:50%;background:'+color+';border:3px solid #fff;box-shadow:0 0 12px '+color+'"></div>';const ic=L.divIcon({html:html,iconSize:[16,16],className:''});const m=L.marker([lat,lon],{icon:ic}).addTo(map);if(label)m.bindPopup(label);markers.push(m);return m;}
 
 async function analyze(file){
+  // One image at a time: overlapping responses would mix evidence and spend quota.
+  if(analysisBusy)return;
+  analysisBusy=true;
+  const input=$('file'),zone=$('drop');
+  input.disabled=true;zone.setAttribute('aria-busy','true');
+  const hint=zone.querySelector('.small'),oldHint=hint&&hint.textContent;
+  if(hint)hint.textContent='הניתוח מתבצע. אפשר לבחור תמונה נוספת כשיסתיים.';
+  try{await analyzeImage(file);}
+  catch(e){showErr('לא הצלחתי להשלים את הניתוח. אפשר לבחור שוב תמונה.');}
+  finally{
+    analysisBusy=false;input.disabled=false;input.value='';
+    zone.setAttribute('aria-busy','false');if(hint)hint.textContent=oldHint;
+    ['exif','up','ai','geo','sun'].forEach(s=>{const el=document.querySelector('.stage[data-s="'+s+'"]');if(el)el.classList.remove('run');});
+  }
+}
+async function analyzeImage(file){
   $('err').classList.remove('on');$('results').classList.remove('on');
-  $('preview').style.display='none';$('previewOv').style.display='none';$('ovNote').style.display='none';markers=[];clientClues=[];lastData=null;
+  $('preview').style.display='none';$('previewOv').style.display='none';$('ovNote').style.display='none';markers.forEach(m=>{if(map)map.removeLayer(m);});markers=[];clientClues=[];lastData=null;lastCanvas=null;
   $('stages').classList.add('on');['exif','up','ai','geo','sun'].forEach(s=>setStage(s,''));
   setStage('exif','run');
 
@@ -257,7 +274,8 @@ async function analyze(file){
   setStage('exif','done');
 
   // preview
-  const url=URL.createObjectURL(file);$('preview').src=url;$('preview').style.display='block';
+  if(previewUrl)URL.revokeObjectURL(previewUrl);
+  const url=previewUrl=URL.createObjectURL(file);$('preview').src=url;$('preview').style.display='block';
 
   // 2. resize for the vision pass
   setStage('up','run');
