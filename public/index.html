@@ -232,8 +232,14 @@ function lumStats(){
 function setStage(k,st){const el=document.querySelector('.stage[data-s="'+k+'"]');if(!el)return;el.classList.remove('run','done');if(st)el.classList.add(st);}
 function showErr(m){$('err').textContent=m;$('err').classList.add('on');}
 
+async function geoJson(url){
+  const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),12000);
+  try{const r=await fetch(url,{signal:ac.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json();}
+  finally{clearTimeout(timer);}
+}
 async function loadPois(lat,lon){
-  try{const r=await fetch('/api/poi?lat='+lat+'&lon='+lon);const j=await r.json();
+  const imageToken=previewUrl;
+  try{const j=await geoJson('/api/poi?lat='+lat+'&lon='+lon);if(imageToken!==previewUrl)return;
     if(j.ok&&j.pois&&j.pois.length){$('mapLegend').textContent+='   ·   סמנים סמוכים (OSM): '+j.pois.slice(0,5).map(p=>p.name+((p.dist||0)>0?' '+p.dist+'מ\'':'')).join(' · ');}
   }catch(e){}
 }
@@ -305,7 +311,7 @@ async function analyzeImage(file){
   setStage('geo','run');
   let reverse=null;
   if(gps){
-    try{const r=await fetch('/api/reverse?lat='+gps.latitude+'&lon='+gps.longitude);const j=await r.json();if(j.ok)reverse=j.label;}catch(e){}
+    try{const j=await geoJson('/api/reverse?lat='+gps.latitude+'&lon='+gps.longitude);if(j.ok)reverse=j.label;}catch(e){reverse=null;}
   }
   setStage('geo','done');
 
