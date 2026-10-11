@@ -257,7 +257,7 @@ function buildClues(o) {
   const add = (cat, text, conf, role, limit, source) => C.push({ cat, text, conf, role, limit, source });
   const V = o.vision || {};
   // metadata / provenance
-  if (o.hasGps) add('מטא-דאטה ומקור', 'קואורדינטות GPS מוטמעות בקובץ: ' + o.gpsLat.toFixed(5) + ', ' + o.gpsLon.toFixed(5), 'גבוהה', 'support', 'EXIF ניתן לזיוף — לכן אומת מול שמש, מזג אוויר וגובה שטח', 'EXIF');
+  if (o.hasGps) add('מטא-דאטה ומקור', 'קואורדינטות GPS מוטמעות בקובץ: ' + o.gpsLat.toFixed(5) + ', ' + o.gpsLon.toFixed(5), 'גבוהה', 'support', 'EXIF ניתן לשינוי; בדיקות תאימות אינן אימות מקור', 'EXIF');
   if (o.hasTs) add('מטא-דאטה ומקור', 'חותמת זמן צילום קיימת', 'גבוהה', 'signal', 'שעון המצלמה עלול לסטות; ההשלכות נבדקו אסטרונומית', 'EXIF');
   for (const s of (o.exifSanity || [])) add('מטא-דאטה ומקור', s.msg, 'גבוהה', s.ok ? 'support' : 'contradict', s.ok ? 'שדה מכונה, לא הוכחת אותנטיות' : 'חריגת שפיות — לבדוק ידנית', 'EXIF');
   // language / signage
@@ -270,7 +270,7 @@ function buildClues(o) {
   }
   // objects
   if (o.signCounts && (o.signCounts.street_signs + o.signCounts.billboards + o.signCounts.license_plates) > 0)
-    add('עצמים', 'ספירת מודל: ' + o.signCounts.street_signs + ' שלטי רחוב · ' + o.signCounts.billboards + ' שלטי חוצות · ' + o.signCounts.license_plates + ' לוחיות', 'בינונית', 'context', 'ספירה חזותית עלולה לפספס או להגזים; משקל הרמזים נמדד בתוכנם, לא במספרם', 'חזותי');
+    add('עצמים', 'ספירת מודל לא מאומתת: ' + o.signCounts.street_signs + ' שלטי רחוב · ' + o.signCounts.billboards + ' שלטי חוצות · ' + o.signCounts.license_plates + ' לוחיות', 'בינונית', 'context', 'ספירה חזותית עלולה לפספס או להגזים; משקל הרמזים נמדד בתוכנם, לא במספרם', 'חזותי');
   if (o.detectVehicles) add('עצמים', o.detectVehicles.count > 0 ? 'איתור מיקומי (detect): ' + o.detectVehicles.count + ' כלי רכב סומנו בתיבות על התמונה' : 'איתור מיקומי (detect): לא סומנו כלי רכב בתמונה', 'בינונית', 'context', 'ספירה אוטומטית עלולה לפספס רכבים חבויים או חתוכים; נוכחות רכב היא הקשר, לא ראיית מיקום', 'חזותי-detect');
   if (o.platePoints) {
     const pn = o.platePoints.count, sc2 = o.signCounts ? o.signCounts.license_plates : null;
@@ -291,14 +291,21 @@ function buildClues(o) {
   const none = v => !v || /^\s*NONE\.?\s*$/i.test(String(v));
   if (!none(V.environment)) add('צמחייה ושטח', 'זוהו מאפייני סביבה ואדריכלות (פירוט בפאנל)', 'בינונית', 'context', 'רמזים איכותניים — תומכים או מחלישים, אינם קובעים לבד', 'חזותי');
   // model guesses
-  for (const g of (o.regionGuesses || [])) add('הערכות מודל', 'הערכה: ' + g.place + (g.corroborated ? ' (אומתה במעבר שני)' : '') + (g.evidence ? ' — ' + g.evidence : ''), ({ high: 'גבוהה', medium: 'בינונית', low: 'נמוכה' })[g.confidence] || 'נמוכה', 'signal', 'הערכת מודל בלבד; לא מאומתת = לא מסומנת על המפה', 'חזותי');
+  for (const g of (o.regionGuesses || [])) add('הערכות מודל', 'הערכה: ' + g.place + (g.corroborated ? ' (חזרה באותו מודל)' : '') + (g.evidence ? ' — ' + g.evidence : ''), ({ high: 'גבוהה', medium: 'בינונית', low: 'נמוכה' })[g.confidence] || 'נמוכה', 'signal', 'הערכת מודל בלבד; לא מאומתת = לא מסומנת על המפה', 'חזותי');
   return C;
 }
 
 async function nominatim(url) {
-  const r = await fetch(url, { headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)', 'Accept-Language': 'he,en' } });
+  const r = await fetch(url, { signal:AbortSignal.timeout(10000), headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)', 'Accept-Language': 'he,en' } });
   if (!r.ok) throw new Error('nominatim ' + r.status);
   return r.json();
+}
+
+export function validCoords(lat,lon){return Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180;}
+export function assessEvidence({hasGps,consistency=[],guesses=[],countries2=[]}){
+ const gpsCheck=consistency.find(c=>c.isGps);
+ const gpsConflict=gpsCheck&&((gpsCheck.contradicts||[]).length||['sun','shadow','weather','altitude'].some(k=>gpsCheck[k]&&gpsCheck[k].ok===false));
+ return {verdict:hasGps?'metadata':(guesses.length||countries2.length?'weak':'none'),pinsAllowed:!!hasGps&&!gpsConflict,gpsConflict:!!gpsConflict,locationVerified:false};
 }
 
 export default {
@@ -312,7 +319,7 @@ export default {
         // optional client-supplied EXIF facts for server-side verification (client stays source of truth for display)
         const exifTs = parseExifTs(u.searchParams.get('ts'));
         const gpsLat = parseFloat(u.searchParams.get('lat')), gpsLon = parseFloat(u.searchParams.get('lon'));
-        const hasGps = isFinite(gpsLat) && isFinite(gpsLon);
+        const hasGps = validCoords(gpsLat,gpsLon);
         const gpsAlt = parseFloat(u.searchParams.get('alt'));
         const hasAlt = isFinite(gpsAlt);
 
@@ -345,17 +352,17 @@ export default {
               out.vision[spec.key] = r.answer || r.caption || null;
               if (spec.key === 'caption') out.vision.caption_reasoning = r.reasoning;
             }
-          } catch (e) { out.errors[spec.key] = String(e).slice(0, 200); }
+          } catch (e) { out.errors[spec.key] = String(e).slice(0, 200); if(/4006|quota|limit exceeded/i.test(String(e))) break; }
         }
 
         // grounded object localization: vehicle boxes + license-plate points (moondream detect/point, non-streaming)
-        try {
+        if(!Object.values(out.errors).some(e=>/4006|quota|limit exceeded/i.test(e))) try {
           const d = await runVisionTask(env, uri, 'detect', 'car');
           out.neurons += d.neurons || 0;
           const objs = Array.isArray(d.res.objects) ? d.res.objects : [];
           out.vision.detectVehicles = { target: 'car', count: objs.length, boxes: objs.slice(0, 24) };
         } catch (e) { out.errors.detect = String(e).slice(0, 200); }
-        try {
+        if(!Object.values(out.errors).some(e=>/4006|quota|limit exceeded/i.test(e))) try {
           const p = await runVisionTask(env, uri, 'point', 'license plate');
           out.neurons += p.neurons || 0;
           const pts = Array.isArray(p.res.points) ? p.res.points : [];
@@ -386,15 +393,9 @@ export default {
         out.ensemble = { pass1: guesses.length, pass2: countries2.length, agreements: guesses.filter(g => g.corroborated).length, pass2Countries: countries2 };
         out.summaries = buildSummaries(out.vision, signals, out.ensemble, exifTs, out.sky, lighting);
 
-        // geocode candidates (medium+ only)
+        // Model guesses are leads, not verified addresses. Do not turn a
+        // geocoder centroid into apparent pinpoint location evidence.
         out.geocoded = [];
-        for (const g of guesses) {
-          if (g.confidence === 'low') continue;
-          try {
-            const j = await nominatim('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=' + encodeURIComponent(g.place));
-            if (j && j[0]) out.geocoded.push({ place: g.place, confidence: g.confidence, evidence: g.evidence, corroborated: !!g.corroborated, lat: +j[0].lat, lon: +j[0].lon, label: j[0].display_name });
-          } catch (e) { /* geocode optional */ }
-        }
 
         // consistency validation per geocoded candidate + EXIF GPS itself
         const candidates = out.geocoded.map(g => ({ name: g.place, lat: g.lat, lon: g.lon, ref: g }));
@@ -422,26 +423,17 @@ export default {
           regionGuesses: guesses, hasGps, gpsLat, gpsLon, hasTs: !!exifTs
         });
 
-        // verdict ladder: confirmed / strong / weak / none
-        let verdict = 'none';
-        if (hasGps) verdict = 'confirmed';
-        else {
-          const strong = out.geocoded.find(g =>
-            (g.confidence === 'high' || (g.confidence === 'medium' && (g.corroborated || (g.supports && g.supports.length))) )
-            && !(g.contradicts && g.contradicts.length)
-            && !(g.sun && g.sun.ok === false) && !(g.shadow && g.shadow.ok === false) && !(g.weather && g.weather.ok === false));
-          if (strong) verdict = 'strong';
-          else if (out.geocoded.length || guesses.length || countries2.length) verdict = 'weak';
-        }
-        out.verdict = verdict;
-        // pins only for confirmed/strong
-        out.pinsAllowed = (verdict === 'confirmed' || verdict === 'strong');
+        // Model agreement, geocoding and EXIF are not independent location proof.
+        const assessment = assessEvidence({hasGps, consistency:out.consistency, guesses, countries2});
+        Object.assign(out,assessment);
+        for (const g of out.geocoded) g.pinEligible=false;
+        out.version='6.0';
         return Response.json(out);
       }
 
       if (u.pathname === '/api/reverse') {
         const lat = u.searchParams.get('lat'), lon = u.searchParams.get('lon');
-        if (!lat || !lon) return Response.json({ ok: false, error: 'missing' }, { status: 400 });
+        if (!validCoords(parseFloat(lat),parseFloat(lon))) return Response.json({ ok: false, error: 'missing' }, { status: 400 });
         try {
           const j = await nominatim(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
           return Response.json({ ok: true, label: j.display_name || null });
@@ -450,7 +442,7 @@ export default {
 
       if (u.pathname === '/api/poi') {
         const lat = parseFloat(u.searchParams.get('lat')), lon = parseFloat(u.searchParams.get('lon'));
-        if (!isFinite(lat) || !isFinite(lon)) return Response.json({ ok: false, error: 'missing' }, { status: 400 });
+        if (!validCoords(lat,lon)) return Response.json({ ok: false, error: 'missing' }, { status: 400 });
         try {
           const q = '[out:json][timeout:8];(node(around:250,' + lat + ',' + lon + ')[name];way(around:250,' + lat + ',' + lon + ')[name];);out center tags 12;';
           let j = null, lastErr = '';
