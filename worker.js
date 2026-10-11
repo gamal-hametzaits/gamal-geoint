@@ -199,7 +199,7 @@ async function weatherCheck(tsParts, lat, lon, sky) {
   if (ageDays < 6) return { skipped: true, msg: 'ארכיון מזג האוויר מתעדכן בהפרש של ~5 ימים — אין נתונים לתאריך הזה עדיין' };
   if (ageDays > 365 * 30) return { skipped: true, msg: 'תאריך מחוץ לטווח הארכיון' };
   try {
-    const r = await fetch('https://archive-api.open-meteo.com/v1/archive?latitude=' + lat + '&longitude=' + lon + '&start_date=' + date + '&end_date=' + date + '&hourly=cloud_cover,precipitation&timezone=auto', { headers: { 'User-Agent': 'gamal-geoint/1.0' } });
+    const r = await fetch('https://archive-api.open-meteo.com/v1/archive?latitude=' + lat + '&longitude=' + lon + '&start_date=' + date + '&end_date=' + date + '&hourly=cloud_cover,precipitation&timezone=auto', { headers: { 'User-Agent': 'gamal-geoint/1.0' }, signal:AbortSignal.timeout(7000) });
     const j = await r.json();
     const cc = j.hourly && j.hourly.cloud_cover, pr = j.hourly && j.hourly.precipitation;
     if (!cc) return null;
@@ -245,8 +245,11 @@ function buildSummaries(V, signals, ens, exifTs, skyClass, lightClass) {
   if (skyClass) lp.push('שמיים ' + skyClass);
   S.shadow = (lp.length ? lp.join(' · ') + '. ' : (none(V.shadow) ? 'לא זוהו צללים או שמיים ברורים. ' : '')) + (exifTs ? 'הסיווג שולב באימות האסטרונומי ובבדיקת מזג האוויר בפאנל האימותים.' : 'בלי חותמת זמן ב-EXIF אי אפשר להפוך את זה לאימות אסטרונומי — נשאר רמז איכותי בלבד.');
   S.caption = 'תיאור סצנה כללי להקשר בלבד — אינו ראיית מיקום כשלעצמו ואינו משפיע על הקביעה.';
-  if (ens && (ens.pass1 || ens.pass2)) S.guesses = 'מעבר 1 העלה ' + ens.pass1 + ' הערכות, מעבר האימות העלה ' + ens.pass2 + ' מדינות, ' + ens.agreements + ' בחפיפה. הערכה לא מאומתת לא מסומנת על המפה.';
+  if (ens && (ens.pass1 || ens.pass2)) S.guesses = 'מעבר 1 העלה ' + ens.pass1 + ' הערכות, מעבר האימות העלה ' + ens.pass2 + ' מדינות, ' + ens.agreements + ' בחפיפה. מועמד משוער עשוי להופיע במפה בנפרד מ-GPS, עם אזהרה מפורשת.';
   else S.guesses = 'המודל לא העלה אף הערכת אזור — הראיות חלשות מדי. זו תשובה לגיטימית, לא תקלה.';
+  const excerpt=v=>String(v||'').replace(/\s+/g,' ').slice(0,450);
+  for(const key of ['text','road','environment','shadow','caption']) if(!none(V[key])) S[key]+=' פירוט זוהה (פלט מודל לא מאומת): '+excerpt(V[key]);
+  S.guesses += ' חפיפה היא חזרה של אותו מודל, לא מקור עצמאי. קואורדינטות מועמד הן נקודת ייחוס של המקום במפה, לא נקודת צילום מאומתת. טווח שגיאת צילום לא ידוע.';
   return S;
 }
 
@@ -295,10 +298,13 @@ function buildClues(o) {
   return C;
 }
 
+let nominatimQueue=Promise.resolve(),nominatimLast=0;
 async function nominatim(url) {
+  let unlock;const previous=nominatimQueue;nominatimQueue=new Promise(r=>unlock=r);await previous;
+  try{await new Promise(r=>setTimeout(r,Math.max(0,1100-(Date.now()-nominatimLast))));nominatimLast=Date.now();
   const r = await fetch(url, { signal:AbortSignal.timeout(10000), headers: { 'User-Agent': 'gamal-geoint/1.0 (geolocation demo; contact: ozoz76747@gmail.com)', 'Accept-Language': 'he,en' } });
   if (!r.ok) throw new Error('nominatim ' + r.status);
-  return r.json();
+  return await r.json();}finally{unlock();}
 }
 
 export function validCoords(lat,lon){return Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180;}
@@ -393,9 +399,16 @@ export default {
         out.ensemble = { pass1: guesses.length, pass2: countries2.length, agreements: guesses.filter(g => g.corroborated).length, pass2Countries: countries2 };
         out.summaries = buildSummaries(out.vision, signals, out.ensemble, exifTs, out.sky, lighting);
 
-        // Model guesses are leads, not verified addresses. Do not turn a
-        // geocoder centroid into apparent pinpoint location evidence.
+        // Candidate coordinates locate the named feature, not necessarily the photo.
         out.geocoded = [];
+        for (const g of guesses.slice(0,2)) {
+          if(!g.evidence || g.confidence==='low') continue;
+          try {
+            const found=await nominatim('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q='+encodeURIComponent(g.place));
+            const p=found&&found[0];
+            if(p&&validCoords(+p.lat,+p.lon)) out.geocoded.push({...g,lat:+p.lat,lon:+p.lon,label:p.display_name,source:'Nominatim / OpenStreetMap',placeType:p.type||null,areaBounds:p.boundingbox||null,coordinateMeaning:'named-feature-reference-point',photoLocationVerified:false,uncertaintyMeters:null});
+          } catch(e) { out.errors.geocode=String(e).slice(0,100); }
+        }
 
         // consistency validation per geocoded candidate + EXIF GPS itself
         const candidates = out.geocoded.map(g => ({ name: g.place, lat: g.lat, lon: g.lon, ref: g }));
@@ -427,6 +440,7 @@ export default {
         const assessment = assessEvidence({hasGps, consistency:out.consistency, guesses, countries2});
         Object.assign(out,assessment);
         for (const g of out.geocoded) g.pinEligible=false;
+        out.candidatePins=out.geocoded.map(g=>({...g,estimated:true}));
         out.version='6.0';
         return Response.json(out);
       }
