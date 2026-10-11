@@ -84,6 +84,9 @@ footer b{color:#999;font-weight:600}
 .guess .g-conf{font-family:var(--mono);font-size:11px;margin-inline-start:10px}
 .guess .g-why{font-size:13px;color:var(--dim);margin-top:4px;line-height:1.6}
 img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid var(--line);margin:24px auto 0;display:block}
+
+header{padding:28px 0 10px}h1{font-size:clamp(42px,7vw,68px)}.sub{font-size:15px}.ticker{display:none}.drop{margin-top:24px;padding:28px 18px}
+button,select{font:inherit;color:var(--text);background:#202024;border:1px solid #48484d;border-radius:10px;padding:11px 16px;min-height:44px;cursor:pointer}button:hover{border-color:var(--red)}button:disabled{opacity:.45;cursor:wait}button.primary{background:#a91523;border-color:#e01f2e}.tools{display:flex;flex-wrap:wrap;gap:9px;margin:14px 0}.workspace{margin-top:20px}.workspace canvas{display:block;max-width:100%;max-height:460px;touch-action:none;border-radius:12px;border:1px solid #444;margin:auto}.privacy{font-size:13px;color:#b7b7bd;line-height:1.7}.ocr-output{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8}.status{color:#cdd7e8;min-height:24px}.quicknav{position:sticky;top:0;z-index:500;background:#111e;backdrop-filter:blur(10px);padding:10px;border-bottom:1px solid #333;display:flex;gap:15px;flex-wrap:wrap}.quicknav a{color:#eee;text-decoration:none;font-size:13px}html{scroll-behavior:smooth;scroll-padding-top:60px}@media(max-width:600px){.wrap{padding:0 12px 60px}.verdict{padding:20px}.verdict h2{font-size:24px}.tools button{flex:1 1 40%}.cols{grid-template-columns:1fr}header .sub{font-size:14px}}
 </style>
 </head>
 <body>
@@ -99,9 +102,18 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
 <label class="drop" id="drop">
   <input type="file" id="file" accept="image/*">
   <div class="icon">🛰️</div>
-  <div class="big">גררו תמונה לכאן או לחצו לבחירה</div>
-  <div class="small">JPEG / PNG / HEIC* · הניתוח החזותי רץ על שרת · המטא-דאטה נקראת בדפדפן שלך</div>
+  <div class="big">1. בוחרים תמונה</div>
+  <div class="small">JPEG / PNG · בחירה לא שולחת את התמונה. ניתוח שרת מתחיל רק בלחיצה מפורשת.</div>
 </label>
+<section class="panel workspace" id="workspace" hidden>
+<h3>2. בודקים את הראיות</h3><p class="privacy">גררו על התמונה כדי לבחור שלט או פרט. החיתוך וקריאת הטקסט נשארים במכשיר. אין זיהוי פנים.</p>
+<canvas id="evidenceCanvas" aria-label="תמונת ראיות: גררו לבחירת אזור"></canvas>
+<div class="tools"><button id="cropBtn">חיתוך הבחירה</button><button id="resetCrop">תמונה מלאה</button><button id="rotateBtn">סיבוב 90°</button><button id="contrastBtn">ניגודיות לטקסט</button></div>
+<div class="tools"><select id="ocrLang" aria-label="שפת OCR"><option value="eng+heb">עברית + אנגלית</option><option value="eng">אנגלית</option><option value="ara+eng">ערבית + אנגלית</option></select><button id="ocrBtn">קריאת טקסט במכשיר</button><button id="copyOcr">העתקת הטקסט</button></div>
+<div id="ocrStatus" class="status" role="status" aria-live="polite"></div><div class="ocr-output" id="ocrOutput"></div>
+<p class="privacy">OCR הוא תמלול לא מאומת, לא הוכחת מיקום. ספריות ומודלי שפה חינמיים יורדים מ-jsDelivr ו-projectnaptha בפעם הראשונה. התמונה עצמה אינה נשלחת אליהם. צילום קטן או מטושטש עלול להיכשל.</p>
+<h3 style="margin-top:20px">3. בוחרים ניתוח</h3><div class="tools"><button id="localBtn">מטא-דאטה ופורנזיקה בלבד</button><button class="primary" id="serverBtn">ניתוח חזותי בשרת</button><button id="exportBtn">ייצוא ראיות JSON</button></div>
+<p class="privacy">ניתוח שרת שולח עותק מוקטן ואת שדות GPS, זמן ומצלמה אם קיימים ל-Cloudflare. השירותים האחרים מקבלים קואורדינטות/מילות חיפוש. המכסה החינמית של AI משותפת לכל הפרויקטים. אין ניסיון חוזר אוטומטי.</p></section>
 <div class="err" id="err"></div>
 <img class="preview" id="preview" style="display:none">
 <canvas class="preview" id="previewOv" style="display:none"></canvas>
@@ -115,17 +127,17 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
   <div class="stage" data-s="sun"><span class="dot"></span> חישוב אסטרונומי — מיקום שמש וצללים</div>
 </div>
 
-<div id="results">
+<div id="results"><nav class="quicknav"><a href="#verdict">מסקנה</a><a href="#ledgerPanel">ראיות</a><a href="#consPanel">אימותים</a><a href="#workspace">כלים</a></nav>
   <div class="verdict" id="verdict"></div>
-  <div id="mapWrap"><div id="map"></div><div class="legend" id="mapLegend"></div></div>
+  <div class="panel" id="candidatePanel" hidden style="margin-top:16px"><h3>📍 מועמדי מיקום משוערים</h3><p class="privacy">הנקודה מסמנת את המקום שחזר מהגיאוקודר, לא בהכרח את המקום שממנו צולמה התמונה. אין רדיוס שגיאת צילום מדוד. גבולות במפה, אם קיימים, הם גבולות המקום ולא טווח ביטחון.</p><div id="candidateBody"></div></div><div id="mapWrap"><div id="map"></div><div class="legend" id="mapLegend"></div></div>
   <div class="panel" id="consPanel" style="display:none;margin-top:16px"><h3>🧪 אימותים ועקביות</h3><div id="consBody"></div></div>
-  <div class="panel" id="ledgerPanel" style="display:none;margin-top:16px"><h3>🧵 כל קצוות החוט — סיכום מאוחד</h3><div class="note" style="margin-top:0">כל רמז שזוהה, עם רמת הביטחון, התפקיד שלו (תומך / סותר / מצמצם / הקשר) והגבלת ההסקה שלו. אין כאן רמזים שהומצאו — מה שלא זוהה, לא מופיע.</div><div id="ledgerBody"></div></div>
+  <div class="panel" id="ledgerPanel" style="display:none;margin-top:16px"><h3>🧵 כל קצוות החוט — סיכום מאוחד</h3><div class="note" style="margin-top:0">כל רמז שזוהה, עם רמת הביטחון, התפקיד שלו (תומך / סותר / מצמצם / הקשר) והגבלת ההסקה שלו. אין כאן קביעות מאומתות אוטומטית. פלט מודל עשוי לטעות; בדקו את הראיה עצמה.</div><div id="ledgerBody"></div></div>
   <div class="cols" style="margin-top:16px">
-    <div class="panel"><h3>📋 מטא-דאטה (EXIF) <span class="conf high" style="margin:0;font-size:10px">וודאות מכונה</span></h3><div id="exifPanel"></div></div>
+    <div class="panel"><h3>📋 מטא-דאטה (EXIF) <span class="conf high" style="margin:0;font-size:10px">ושדות קובץ, ניתנים לשינוי</span></h3><div id="exifPanel"></div></div>
     <div class="panel"><h3>☀️ חישוב שמש וצללים <span class="conf high" style="margin:0;font-size:10px">דטרמיניסטי</span></h3><div id="sunPanel"></div></div>
   </div>
   <div class="cols">
-    <div class="panel"><h3>🔬 ניתוח רמת שגיאה (ELA) <span class="conf med" style="margin:0;font-size:10px">זיהוי עריכה</span></h3><canvas id="ela" style="max-width:100%;border-radius:8px"></canvas><div class="note" id="elaNote"></div><div class="note" id="ghostNote"></div></div>
+    <div class="panel"><h3>🔬 ניתוח רמת שגיאה (ELA) <span class="conf med" style="margin:0;font-size:10px">מפת דחיסה בלבד</span></h3><canvas id="ela" style="max-width:100%;border-radius:8px"></canvas><div class="note" id="elaNote"></div><div class="note" id="ghostNote"></div></div>
     <div class="panel"><h3>🧾 שפיות מטא-דאטה ומקור</h3><div id="sanityPanel"></div></div>
   </div>
   <div class="cols">
@@ -138,7 +150,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
   </div>
   <div class="cols">
     <div class="panel"><h3>🖼️ תיאור כללי</h3><div class="clue" id="cCap"></div></div>
-    <div class="panel"><h3>🧭 הערכות אזור <span class="conf none" style="margin:0;font-size:10px">לא מאומת = לא על המפה</span></h3><div id="guesses"></div></div>
+    <div class="panel"><h3>🧭 הערכות אזור <span class="conf none" style="margin:0;font-size:10px">השערה, לא הוכחה</span></h3><div id="guesses"></div></div>
   </div>
   <footer id="foot"></footer>
 </div>
@@ -146,6 +158,7 @@ img.preview{max-width:100%;max-height:300px;border-radius:12px;border:1px solid 
 
 <script src="vendor/exifr.umd.js"></script>
 <script src="vendor/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -183,7 +196,7 @@ function runEla(){
     const elaTxt=avg<2?'התמונה כבר דחוסה בחוזקה (ELA שטוח) — אופייני לתמונה מרשת חברתית או שידוך חוזר. אין אינדיקציה לעריכה מקומית.':avg<8?'רמת שגיאה אחידה יחסית — אין כתמים חמים בולטים שמרמזים על עריכה מקומית.':'נמצאו אזורים עם רמת שגיאה גבוהה (כתמים בהירים באדום) — ייתכן שעריכה מקומית בוצעה שם. בדקו את האזורים הבהירים.';
     note.textContent=elaTxt;
     clientClues=clientClues.filter(c=>c.source!=='ELA');
-    clientClues.push({cat:'פורנזיקת תמונה',text:'ELA: '+elaTxt,conf:'בינונית',role:avg>=8?'contradict':'context',limit:'ELA אינו מוכיח עריכה — דחיסה חוזרת משטחת אותו',source:'ELA'});
+    clientClues.push({cat:'פורנזיקת תמונה',text:'ELA: '+elaTxt,conf:'נמוכה',role:'context',limit:'ELA אינו מוכיח עריכה — דחיסה חוזרת משטחת אותו',source:'ELA'});
     if(lastData)renderLedger(lastData);
   };
   re.src=src.toDataURL('image/jpeg',0.75);
@@ -246,23 +259,23 @@ async function loadPois(lat,lon){
 function initMap(){if(map)return;map=L.map('map',{attributionControl:true}).setView([30,35],2);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenStreetMap'}).addTo(map);L.Icon.Default.imagePath='vendor/images/';}
 function pin(lat,lon,color,label){const html='<div style="width:16px;height:16px;border-radius:50%;background:'+color+';border:3px solid #fff;box-shadow:0 0 12px '+color+'"></div>';const ic=L.divIcon({html:html,iconSize:[16,16],className:''});const m=L.marker([lat,lon],{icon:ic}).addTo(map);if(label)m.bindPopup(label);markers.push(m);return m;}
 
-async function analyze(file){
+async function analyze(file,localOnly=false){
   // One image at a time: overlapping responses would mix evidence and spend quota.
-  if(analysisBusy)return;
-  analysisBusy=true;
+  if(analysisBusy||ocrBusy)return;
+  analysisBusy=true;['serverBtn','localBtn','ocrBtn'].forEach(id=>$(id).disabled=true);
   const input=$('file'),zone=$('drop');
   input.disabled=true;zone.setAttribute('aria-busy','true');
   const hint=zone.querySelector('.small'),oldHint=hint&&hint.textContent;
   if(hint)hint.textContent='הניתוח מתבצע. אפשר לבחור תמונה נוספת כשיסתיים.';
-  try{await analyzeImage(file);}
+  try{await analyzeImage(file,localOnly);}
   catch(e){showErr('לא הצלחתי להשלים את הניתוח. אפשר לבחור שוב תמונה.');}
   finally{
-    analysisBusy=false;input.disabled=false;input.value='';
+    analysisBusy=false;['serverBtn','localBtn','ocrBtn'].forEach(id=>$(id).disabled=false);input.disabled=false;input.value='';
     zone.setAttribute('aria-busy','false');if(hint)hint.textContent=oldHint;
     ['exif','up','ai','geo','sun'].forEach(s=>{const el=document.querySelector('.stage[data-s="'+s+'"]');if(el)el.classList.remove('run');});
   }
 }
-async function analyzeImage(file){
+async function analyzeImage(file,localOnly=false){
   $('err').classList.remove('on');$('results').classList.remove('on');
   $('preview').style.display='none';$('previewOv').style.display='none';$('ovNote').style.display='none';markers.forEach(m=>{if(map)map.removeLayer(m);});markers=[];clientClues=[];lastData=null;lastCanvas=null;
   $('stages').classList.add('on');['exif','up','ai','geo','sun'].forEach(s=>setStage(s,''));
@@ -297,7 +310,7 @@ async function analyzeImage(file){
   const url2='/api/analyze?'+qs.toString();
   const post=async()=>{const ac=new AbortController();const to=setTimeout(()=>ac.abort(),170000);try{const r=await fetch(url2,{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob,signal:ac.signal});return await r.json();}finally{clearTimeout(to);}};
   try{
-    data=await post();
+    data=localOnly?{ok:true,vision:{},geocoded:[],errors:{},verdict:gps?'metadata':'none',pinsAllowed:!!gps,localOnly:true}:await post();
   }catch(e1){
     // Never resubmit an AI request automatically: a timeout may have consumed quota.
     data={ok:false,error:e1.name==='AbortError'?'הבקשה לא הסתיימה בזמן; לא בוצע ניסיון נוסף אוטומטי':'החיבור נותק; לא בוצע ניסיון נוסף אוטומטי'};
@@ -310,7 +323,7 @@ async function analyzeImage(file){
   // 4. reverse-geocode EXIF GPS / use geocoded textual evidence
   setStage('geo','run');
   let reverse=null;
-  if(gps){
+  if(gps&&!localOnly){
     try{const j=await geoJson('/api/reverse?lat='+gps.latitude+'&lon='+gps.longitude);if(j.ok)reverse=j.label;}catch(e){reverse=null;}
   }
   setStage('geo','done');
@@ -360,19 +373,19 @@ function render(exif,gps,dtRaw,dt,data,reverse){
   $('results').classList.add('on');
   const V=data.vision||{},geo=data.geocoded||[];
   // verdict
-  const verdict=data.verdict||(gps?'confirmed':(geo.length?'weak':'none'));
+  const verdict=data.verdict||(gps?'metadata':(geo.length?'weak':'none'));
   let html='';
-  if(verdict==='confirmed'){
-    html='<h2>מיקום מאושר</h2><span class="conf high">רמה 4/4 · GPS ב-EXIF</span>'
+  if(verdict==='metadata'||verdict==='confirmed'){
+    html='<h2>מיקום שמופיע במטא-דאטה</h2><span class="conf high">GPS ב-EXIF · לא אימות צילום</span>'
       +'<div class="place">'+esc(reverse||'שם מקום לא נמצא')+'</div>'
       +'<div class="coords">'+gps.latitude.toFixed(6)+', '+gps.longitude.toFixed(6)+'</div>'
-      +'<p>הקואורדינטות הוטמעו בקובץ על ידי המצלמה. זו הראיה החזקה ביותר — אבל EXIF ניתן לזיוף, ולכן כל שאר הרמזים נבדקים מולו בפאנל האימותים למטה.</p>';
+      +'<p>הקובץ מכיל קואורדינטות. לא ידוע מי כתב אותן והן ניתנות לשינוי. הסיכה היא שדה בקובץ, לא הוכחה שהצילום נעשה שם.</p>';
   } else if(verdict==='strong'){
     html='<h2>אינדיקציה חזקה</h2><span class="conf med">רמה 3/4 · ראיה חזותית מאומתת</span>'
       +'<p>אין GPS בתמונה, אבל נמצאה ראיה טקסטואלית/חזותית קונקרטית שעברה אימות עקביות (שפה, תקני כביש, שמש) ללא סתירות. הסיכות הכתומות על המפה הן אינדיקציה — לא מיקום ודאי.</p>';
   } else if(verdict==='weak'){
     html='<h2>אינדיקציה חלשה בלבד</h2><span class="conf med">רמה 2/4 · רמזים לא מאומתים</span>'
-      +'<p>אין GPS בתמונה. המודל העלה הערכות אזור, אבל הן לא עברו את סף האימות שלנו (חסר אימות צולב או שיש סתירות) — לכן לא מסמנים על המפה. ההערכות מופיעות בפאנל "הערכות אזור" כפי שהן.</p>';
+      +'<p>אין GPS בתמונה. המודל העלה הערכות אזור, אבל הן לא עברו את סף האימות שלנו (חסר אימות צולב או שיש סתירות) — לכן לא מסמנים מיקום מאומת. מועמד משוער עשוי להופיע בנפרד. הסכמה בין ניסוחים של אותו מודל אינה אימות עצמאי. ההערכות מופיעות בפאנל "הערכות אזור" כפי שהן.</p>';
   } else {
     html='<h2>לא ניתן לקבוע מיקום</h2><span class="conf none">רמה 1/4 · ללא קביעה</span>'
       +'<p>אין GPS בתמונה והניתוח החזותי לא מצא ראיה מספיק חזקה. למטה — כל הסימנים שזוהו, כפי שהם. לא ננחש בשבילכם.</p>';
@@ -380,19 +393,31 @@ function render(exif,gps,dtRaw,dt,data,reverse){
   const cons0=data.consistency||[];
   const supN=cons0.reduce((a,c)=>a+(c.supports?c.supports.length:0)+(c.sun&&c.sun.ok?1:0)+(c.shadow&&c.shadow.ok?1:0)+(c.weather&&c.weather.ok?1:0)+(c.altitude&&c.altitude.ok?1:0),0);
   const conN=cons0.reduce((a,c)=>a+(c.contradicts?c.contradicts.length:0)+(c.sun&&c.sun.ok===false?1:0)+(c.shadow&&c.shadow.ok===false?1:0)+(c.weather&&c.weather.ok===false?1:0)+(c.altitude&&c.altitude.ok===false?1:0),0);
-  if(cons0.length)html+='<div class="note">למה: '+(verdict==='confirmed'?'GPS ב-EXIF (הראיה החזקה ביותר)':'הערכה חזותית מאומתת')+' · '+supN+' אימותים תומכים · '+conN+' סתירות. הפירוט בפאנל האימותים למטה.</div>';
+  if(cons0.length)html+='<div class="note">למה: '+(verdict==='metadata'?'GPS בקובץ, לא מאומת':'הערכה חזותית לא מאומתת')+' · '+supN+' אימותים תומכים · '+conN+' סתירות. הפירוט בפאנל האימותים למטה.</div>';
+  if(data.gpsConflict)html+='<p style="color:#ff8f9a">נמצאה סתירה מול ה-GPS. לא מציגים סיכה. בדיקות שמש/מזג אוויר תלויות בזמן ובאזור זמן משוער, ולכן הסתירה דורשת בדיקה ידנית.</p>';
   $('verdict').innerHTML=html;
 
+  candidateLayers.forEach(layer=>{if(map)map.removeLayer(layer);});candidateLayers=[];
+  const candidates=data.candidatePins||[];
+  $('candidatePanel').hidden=!candidates.length;
+  $('candidateBody').innerHTML=candidates.map(g=>'<div class="guess"><b>'+esc(g.place)+'</b><div class="g-why">'+esc(g.evidence||'')+'</div><div class="coords" dir="ltr">'+Number(g.lat).toFixed(5)+', '+Number(g.lon).toFixed(5)+'</div><div class="note">משוער, לא מאומת · ביטחון מודל: '+esc(g.confidence)+' · נקודת ייחוס במפה, לא נ״צ צילום מוכח · טווח שגיאה: לא ידוע</div><div class="note">מקור: '+esc(g.source||'')+' · '+esc(g.label||'')+'</div></div>').join('');
   // map
-  if(data.pinsAllowed&&(gps||geo.length)){
+  if((data.pinsAllowed&&gps)||candidates.length){
     $('mapWrap').classList.add('on');initMap();
     const pts=[];
-    if(gps){pin(gps.latitude,gps.longitude,'#E01F2E','<b>GPS EXIF</b><br>'+gps.latitude.toFixed(5)+','+gps.longitude.toFixed(5));pts.push([gps.latitude,gps.longitude]);}
-    geo.forEach(g=>{pin(g.lat,g.lon,'#f1c40f','<b>אינדיקציה (לא ודאי)</b><br>'+esc(g.place)+'<br><small>'+esc(g.evidence||'')+'</small>');pts.push([g.lat,g.lon]);});
-    if(pts.length===1)map.setView(pts[0],gps?15:6);else map.fitBounds(pts,{padding:[40,40]});
+    if(gps&&!data.gpsConflict){pin(gps.latitude,gps.longitude,'#E01F2E','<b>GPS EXIF</b><br>'+gps.latitude.toFixed(5)+','+gps.longitude.toFixed(5));pts.push([gps.latitude,gps.longitude]);}
+    candidates.forEach(g=>{
+      if(!Number.isFinite(+g.lat)||!Number.isFinite(+g.lon))return;
+      const box=(g.areaBounds||[]).map(Number),areaTypes=['country','state','region','city','town','village','municipality','administrative','suburb'];
+      if(box.length===4&&box.every(Number.isFinite)&&areaTypes.includes(g.placeType)){
+        const bounds=[[box[0],box[2]],[box[1],box[3]]];
+        const layer=L.rectangle(bounds,{color:'#E01F2E',fillOpacity:.12,weight:2}).addTo(map).bindPopup('<b>אזור מועמד משוער, לא טווח ביטחון</b><br>'+esc(g.place)+'<br>גבולות תיבה של OSM, לא גבול מנהלי מדויק');candidateLayers.push(layer);pts.push(...bounds);
+      }else{pin(+g.lat,+g.lon,'#e2b64f','<b>מועמד משוער, לא מיקום צילום מאומת</b><br>'+esc(g.place)+'<br>'+Number(g.lat).toFixed(5)+', '+Number(g.lon).toFixed(5)+'<br><small>'+esc(g.evidence||'')+'</small>');pts.push([+g.lat,+g.lon]);}
+    });
+    if(pts.length===1)map.setView(pts[0],gps?15:6);else if(pts.length)map.fitBounds(pts,{padding:[40,40]});
     setTimeout(()=>map.invalidateSize(),150);
-    $('mapLegend').textContent='● אדום = GPS מהתמונה (EXIF)   ● צהוב = אינדיקציה חזותית בלבד';
-    if(gps)loadPois(gps.latitude,gps.longitude);
+    $('mapLegend').textContent='● אדום = GPS מהתמונה (EXIF)   תיבה אדומה = אזור מועמד משוער (גבולות OSM) · צהוב = מקום מועמד, לא נ״צ צילום מאומת';
+    // Nearby place names are context, never corroboration of where the image was taken.
   } else {$('mapWrap').classList.remove('on');}
 
   // consistency panel
@@ -403,7 +428,7 @@ function render(exif,gps,dtRaw,dt,data,reverse){
     $('consPanel').style.display='block';
     let cb='';
     if(ens&&(ens.pass1||ens.pass2)){
-      cb+='<div class="note" style="margin-top:0;margin-bottom:14px">אנסמבל: שני מעברי ניתוח עצמאיים — מעבר 1 העלה '+ens.pass1+' הערכות, מעבר 2 (אימות לפי ראיות קשיחות בלבד) העלה '+ens.pass2+'. '+ens.agreements+' הערכות זכו לאימות צולב.</div>';
+      cb+='<div class="note" style="margin-top:0;margin-bottom:14px">אנסמבל: שני ניסוחים לאותו מודל, לא מקורות עצמאיים — מעבר 1 העלה '+ens.pass1+' הערכות, מעבר 2 (אימות לפי ראיות קשיחות בלבד) העלה '+ens.pass2+'. '+ens.agreements+' הערכות חזרו בשני המעברים. חזרה אינה אימות חיצוני.</div>';
     }
     for(const c of cons){
       cb+='<div class="guess"><span class="g-place">'+esc(c.name)+'</span>'+(c.isGps?'<span class="g-conf conf high">EXIF</span>':'')
@@ -502,18 +527,38 @@ function render(exif,gps,dtRaw,dt,data,reverse){
 
   // footer honesty
   const errs=Object.keys(data.errors||{});
-  $('foot').innerHTML='<b>שקיפות:</b> ניתוח חזותי על ידי <span style="font-family:var(--mono)">'+esc(data.model||'—')+'</span> (Cloudflare Workers AI, חינם · '+(data.neurons?Math.round(data.neurons)+' neurons בניתוח זה':'')+', מכסה יומית חינמית ~10,000 neurons ≈ ~20 ניתוחים מלאים ביום). '
-    +'מטא-דאטה נקראת בדפדפן שלך ולא נשמרת. התמונה עצמה נשלחת לניתוח ולא נשמרת בשרת. '
+  if(data.localOnly){$('foot').textContent='ניתוח מקומי בלבד: לא הופעל AI. התמונה ושדות המטא-דאטה לא נשלחו לניתוח שרת. מפה, אם נפתחה, מורידה אריחים מ-OpenStreetMap.';return;}
+  $('foot').innerHTML='<b>שקיפות:</b> ניתוח חזותי על ידי <span style="font-family:var(--mono)">'+esc(data.model||'—')+'</span> (Cloudflare Workers AI, חינם · '+(data.neurons?Math.round(data.neurons)+' neurons בניתוח זה':'')+', מכסה יומית חינמית 10,000 neurons משותפת לחשבון; מספר הניתוחים אינו קבוע). '
+    +'בניתוח שרת נשלחים עותק התמונה ושדות GPS/זמן/מצלמה שנקראו. אין בקוד שלנו שמירת תמונות; זו אינה התחייבות למדיניות הספק. '
     +'מפה: OpenStreetMap · גיאוקודינג: Nominatim. '
-    +'<b>כלל ברזל:</b> בלי ראיות — אין סיכה על המפה.'
+    +'<b>כלל ברזל:</b> סיכה משוערת אינה הוכחת מיקום. בלי ראיות אין קביעה מאומתת.'
     +(errs.length?'<br><b>שים לב:</b> שאילתות שנכשלו: '+errs.map(esc).join(', ')+' — התוצאות חלקיות.':'');
 }
 
 const drop=$('drop');
 drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('over');});
 drop.addEventListener('dragleave',()=>drop.classList.remove('over'));
-drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0])analyze(e.dataTransfer.files[0]);});
-$('file').addEventListener('change',e=>{if(e.target.files[0])analyze(e.target.files[0]);});
+drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0])prepareEvidence(e.dataTransfer.files[0]);});
+$('file').addEventListener('change',e=>{if(e.target.files[0])prepareEvidence(e.target.files[0]);});
+let candidateLayers=[];
+let evidenceFile=null,evidenceBase=null,evidenceView=null,selection=null,startPt=null,ocrBusy=false,ocrWorker=null;
+const evidenceCanvas=$('evidenceCanvas');
+function drawEvidence(){if(!evidenceView)return;evidenceCanvas.width=evidenceView.width;evidenceCanvas.height=evidenceView.height;const c=evidenceCanvas.getContext('2d');c.drawImage(evidenceView,0,0);if(selection){c.strokeStyle='#5bd8ff';c.lineWidth=Math.max(2,evidenceCanvas.width/300);c.strokeRect(selection.x,selection.y,selection.w,selection.h);}}
+function cloneEvidence(src){const c=document.createElement('canvas');c.width=src.width;c.height=src.height;c.getContext('2d').drawImage(src,0,0);return c;}
+async function prepareEvidence(file){if(analysisBusy||ocrBusy)return;if(!file.type.startsWith('image/'))return showErr('נא לבחור תמונה');if(file.size>25000000)return showErr('מגבלת קובץ: 25MB');const u=URL.createObjectURL(file),im=new Image();try{await new Promise((ok,no)=>{im.onload=ok;im.onerror=no;im.src=u;});const scale=Math.min(1,2000/Math.max(im.width,im.height));const c=document.createElement('canvas');c.width=Math.round(im.width*scale);c.height=Math.round(im.height*scale);c.getContext('2d').drawImage(im,0,0,c.width,c.height);evidenceBase=c;evidenceView=cloneEvidence(c);evidenceFile=file;selection=null;$('workspace').hidden=false;$('ocrOutput').textContent='';$('ocrStatus').textContent='התמונה מוכנה. גררו לבחירת אזור או הפעילו כלי.';$('results').classList.remove('on');$('preview').style.display='none';$('previewOv').style.display='none';$('ovNote').style.display='none';$('err').classList.remove('on');drawEvidence();}catch(e){showErr('פורמט לא נתמך בדפדפן. נסו JPEG או PNG.');}finally{URL.revokeObjectURL(u);}}
+function point(e){const r=evidenceCanvas.getBoundingClientRect();return{x:Math.max(0,Math.min(evidenceCanvas.width,(e.clientX-r.left)*evidenceCanvas.width/r.width)),y:Math.max(0,Math.min(evidenceCanvas.height,(e.clientY-r.top)*evidenceCanvas.height/r.height))};}
+evidenceCanvas.addEventListener('pointerdown',e=>{if(ocrBusy)return;startPt=point(e);evidenceCanvas.setPointerCapture(e.pointerId);});
+evidenceCanvas.addEventListener('pointermove',e=>{if(!startPt)return;const p=point(e);selection={x:Math.min(p.x,startPt.x),y:Math.min(p.y,startPt.y),w:Math.abs(p.x-startPt.x),h:Math.abs(p.y-startPt.y)};drawEvidence();});
+evidenceCanvas.addEventListener('pointerup',()=>startPt=null);evidenceCanvas.addEventListener('pointercancel',()=>startPt=null);
+$('cropBtn').onclick=()=>{if(ocrBusy)return;if(!selection||selection.w<8||selection.h<8){$('ocrStatus').textContent='בחרו אזור באמצעות גרירה על התמונה.';return;}const c=document.createElement('canvas');c.width=Math.round(selection.w);c.height=Math.round(selection.h);c.getContext('2d').drawImage(evidenceView,selection.x,selection.y,selection.w,selection.h,0,0,c.width,c.height);evidenceView=c;selection=null;drawEvidence();};
+$('resetCrop').onclick=()=>{if(ocrBusy)return;evidenceView=cloneEvidence(evidenceBase);selection=null;drawEvidence();};
+$('rotateBtn').onclick=()=>{if(ocrBusy)return;const c=document.createElement('canvas');c.width=evidenceView.height;c.height=evidenceView.width;const x=c.getContext('2d');x.translate(c.width,0);x.rotate(Math.PI/2);x.drawImage(evidenceView,0,0);evidenceView=c;selection=null;drawEvidence();};
+$('contrastBtn').onclick=()=>{if(ocrBusy)return;const c=evidenceView.getContext('2d'),d=c.getImageData(0,0,evidenceView.width,evidenceView.height);for(let i=0;i<d.data.length;i+=4){const l=.2126*d.data[i]+.7152*d.data[i+1]+.0722*d.data[i+2],v=Math.max(0,Math.min(255,(l-128)*1.6+128));d.data[i]=d.data[i+1]=d.data[i+2]=v;}c.putImageData(d,0,0);selection=null;drawEvidence();};
+$('ocrBtn').onclick=async()=>{if(ocrBusy||analysisBusy||!evidenceView)return;ocrBusy=true;$('ocrBtn').disabled=true;$('serverBtn').disabled=true;$('localBtn').disabled=true;const token=evidenceFile;try{if(!window.Tesseract)throw new Error('ספריית OCR לא נטענה');$('ocrStatus').textContent='טוען מודל שפה חינמי. בפעם הראשונה זה עשוי לקחת זמן.';ocrWorker=await Tesseract.createWorker($('ocrLang').value,1,{workerPath:'https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/worker.min.js',corePath:'https://cdn.jsdelivr.net/npm/tesseract.js-core@6.0.0',logger:m=>{$('ocrStatus').textContent='OCR: '+Math.round((m.progress||0)*100)+'%';}});const {data}=await ocrWorker.recognize(evidenceView);if(token!==evidenceFile)return;$('ocrOutput').textContent=data.text.trim()||'לא נמצא טקסט קריא.';$('ocrStatus').textContent='הושלם. ציון OCR: '+Math.round(data.confidence||0)+'/100 (לא ביטחון במיקום).';}catch(e){$('ocrStatus').textContent='קריאת הטקסט נכשלה. בדקו חיבור או נסו חיתוך חד יותר.';}finally{if(ocrWorker){await ocrWorker.terminate().catch(()=>{});ocrWorker=null;}ocrBusy=false;$('ocrBtn').disabled=false;$('serverBtn').disabled=false;$('localBtn').disabled=false;}};
+$('copyOcr').onclick=async()=>{try{await navigator.clipboard.writeText($('ocrOutput').textContent);$('ocrStatus').textContent='הטקסט הועתק.';}catch{$('ocrStatus').textContent='העתקה לא זמינה. אפשר לסמן את הטקסט ידנית.';}};
+$('localBtn').onclick=()=>{if(evidenceFile&&!ocrBusy)analyze(evidenceFile,true);};$('serverBtn').onclick=()=>{if(evidenceFile&&!ocrBusy)analyze(evidenceFile,false);};
+$('exportBtn').onclick=()=>{const report={version:'6.0',image:evidenceFile?.name,exportedAt:new Date().toISOString(),ocr: $('ocrOutput').textContent,ocrSource:'Tesseract local transcription, unverified',analysis:lastData||null,localClues:clientClues,limits:['EXIF is editable','Model agreement is not independent verification','No face identification']};const u=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download='geoint-evidence.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),5000);};
+
 </script>
 </body>
 </html>
