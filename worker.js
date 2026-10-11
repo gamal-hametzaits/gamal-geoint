@@ -307,6 +307,14 @@ async function nominatim(url) {
   return await r.json();}finally{unlock();}
 }
 
+export function isNamedPlace(value){
+ const p=String(value||'').trim();
+ return p.length>=3&&!/^(city|town|village|country|region|urban|suburban|rural|street|road|neighborhood|neighbourhood|unknown|none|n\/a|european city|urban area|residential area|עיר|מדינה|רחוב|אזור|שכונה)$/i.test(p)&&!/^\d+$/.test(p);
+}
+export function placeMatchesResult(place,label){
+ const norm=s=>String(s||'').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+ const p=norm(place),l=norm(label);return !!p&&(' '+l+' ').includes(' '+p+' ');
+}
 export function validCoords(lat,lon){return Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180;}
 export function assessEvidence({hasGps,consistency=[],guesses=[],countries2=[]}){
  const gpsCheck=consistency.find(c=>c.isGps);
@@ -402,11 +410,11 @@ export default {
         // Candidate coordinates locate the named feature, not necessarily the photo.
         out.geocoded = [];
         for (const g of guesses.slice(0,2)) {
-          if(!g.evidence || g.confidence==='low') continue;
+          if(!g.evidence || g.confidence==='low' || !isNamedPlace(g.place)) continue;
           try {
             const found=await nominatim('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q='+encodeURIComponent(g.place));
             const p=found&&found[0];
-            if(p&&validCoords(+p.lat,+p.lon)) out.geocoded.push({...g,lat:+p.lat,lon:+p.lon,label:p.display_name,source:'Nominatim / OpenStreetMap',placeType:p.type||null,areaBounds:p.boundingbox||null,coordinateMeaning:'named-feature-reference-point',photoLocationVerified:false,uncertaintyMeters:null});
+            if(p&&validCoords(+p.lat,+p.lon)&&placeMatchesResult(g.place,p.display_name)) out.geocoded.push({...g,lat:+p.lat,lon:+p.lon,label:p.display_name,source:'Nominatim / OpenStreetMap',placeType:p.type||null,areaBounds:p.boundingbox||null,coordinateMeaning:'named-feature-reference-point',photoLocationVerified:false,uncertaintyMeters:null});
           } catch(e) { out.errors.geocode=String(e).slice(0,100); }
         }
 
