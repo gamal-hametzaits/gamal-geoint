@@ -1,25 +1,25 @@
-# גיאואינט (GEOINT)
+# גיאואינט v6
 
-כלי ווב למיצוי מיקום מתמונה. מעלים תמונה, והמערכת:
+Free image evidence workspace, Hebrew RTL. Image selection is local and does not start AI automatically.
 
-1. **מחלצת מטא-דאטה (EXIF)** בדפדפן (exifr) — GPS, מצלמה, חותמת זמן, תוכנה. לא נשלח לשרת.
-2. **מנתחת רמזים חזותיים** בשרת עם מודל הראייה `@cf/moondream/moondream3.1-9B-A2B` (Cloudflare Workers AI) — 8 שאילתות מומחה: תיאור, שילוט/OCR, כביש ורכב, סביבה, צללים, סיווג תאורה, ואנסמבל כפול של הערכת אזור (שני מעברים בניסוחים שונים עם אימות צולב).
-3. **שכבת אימות דטרמיניסטית:** כתב על שילוט ← מדינות אפשריות, צד נהיגה, צבע לוחיות, צבע קו אמצע — כל הערכת אזור נבדקת מול הרמזים (תומך/סותר), וגם נתוני ה-EXIF עצמם. בדיקת שמש: חותמת זמן + מועמד מיקום ← גובה שמש מחושב מול סוג התאורה בתמונה; סתירה = דגל אדום לזיוף EXIF.
-4. **סולם קביעה:** מאושר (GPS) ← אינדיקציה חזקה (עברה אימותים) ← אינדיקציה חלשה (לא על המפה) ← לא ניתן לקבוע.
-3. **חישוב אסטרונומי** — מיקום שמש (אזימוט/גובה) מתוך חותמת זמן + מיקום, להצלבה מול צללים.
-5. **כלל ברזל:** אם אין ראיות — לא מסמנים מיקום. מוצגים רק הרמזים שזוהו. סיכה אדומה על המפה = GPS מ-EXIF בלבד; סיכה צהובה = אינדיקציה חזותית (לא ודאית) שעברה גיאוקודינג.
+## New tools
+- Tesseract.js 6.0.1 local OCR, Hebrew+English or Arabic+English, crop, rotation and contrast. Transcription is unverified; OCR confidence is not location confidence.
+- Local metadata/forensics mode, explicit server analysis and JSON evidence export.
+- EXIF GPS is editable metadata, not confirmed location. Contradictions hide its pin. Same-model agreement never authorizes a location pin. Candidate geocoding is explicitly labelled as unverified. City/region/country candidates use red bounding-box areas from OSM, not fake exact photo pins. Concrete named places use labelled candidate pins; uncertainty is unknown.
+- First-time OCR downloads Apache-2.0 libraries from jsDelivr and projectnaptha and language models. No image upload for OCR. Models may be slow on phones; blurry/small text may fail.
 
-## סטק
+## Sources and licenses
+- https://github.com/naptha/tesseract.js/ - Apache 2.0
+- https://github.com/naptha/tesseract.js-core - Apache 2.0
+- https://github.com/tesseract-ocr/tessdata_fast - Apache 2.0
+- Tesseract package distributions retain Apache-2.0 notices. CDN dependencies are pinned to Tesseract 6.0.1 / core 6.0.0.
+- Existing exifr and Leaflet licenses remain unchanged.
 
-- Cloudflare Worker + Workers AI (vision) + Static Assets. כולו על ה-Free tier (~10,000 neurons ליום ≈ ~22 ניתוחים מלאים).
-- דף יחיד, עברית RTL, בלי בנייה — `public/index.html` + ספריות vendored ב-`public/vendor/` (exifr, Leaflet).
-- מפה: OpenStreetMap tiles · גיאוקודינג: Nominatim (דרך ה-worker, עם User-Agent מסודר).
+## Privacy and limits
+Server analysis sends a resized image and available GPS/time/camera fields to Cloudflare. No image persistence is implemented in this app, but provider policies also apply. Local-only analysis makes no analysis/reverse API requests; a GPS map downloads OpenStreetMap tiles. Image upload cap is 25MB in the UI, resized server input cap 8MB.
 
-## פריסה מחדש
+Cloudflare AI free allowance: 10,000 neurons/day shared across the account, not a fixed number of analyses. Stop on quota exhaustion; no automatic client retry. Usage reported by the provider may be incomplete. https://developers.cloudflare.com/workers-ai/platform/pricing/
 
-```
-npm install
-CLOUDFLARE_API_TOKEN=... npx wrangler deploy
-```
+No face identification. No reverse-image-search API. ELA/JPEG Ghost are compression visualizations, not authentication tests. Sun/weather checks depend on editable timestamps and an approximate timezone. https://operations.osmfoundation.org/policies/nominatim/ defines the public geocoder's 1 request/s application-wide ceiling. Candidate geocoding is capped at two evidence-bearing guesses. Calls queue at least 1.1s apart within one Worker isolate; this is not an account-wide distributed rate limiter, so the public endpoint is suitable only for this low-traffic personal tool. Automatic POI lookups are disabled.
 
-אין סודות בקוד. טוקן ה-API נשמר בכספת בלבד.
+Existing GitHub Actions deploy workflow and Cloudflare free Workers/AI bindings. No new paid service, credential or account required.
